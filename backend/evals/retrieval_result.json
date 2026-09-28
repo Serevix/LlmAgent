@@ -1,5 +1,5 @@
 {
-  "evaluated_at": "2026-09-28T02:28:53.663604+00:00",
+  "evaluated_at": "2026-09-28T02:57:24.187389+00:00",
   "embedding_model": "BAAI/bge-m3",
   "min_score": 0.55,
   "milvus_collection": "llm_book_chunks_bge_m3",
@@ -11,6 +11,14 @@
     {
       "sha256": "b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea",
       "chunks": 149
+    },
+    {
+      "sha256": "483114a67bb2f4bf8df6aebab442a61f07b024c96117631fd4367c3a16ffbcb8",
+      "chunks": 4
+    },
+    {
+      "sha256": "55ee987f352f62b1788c783abedfa346245b65db518cf0ef818055469ace20e0",
+      "chunks": 20
     }
   ],
   "count": 15,
@@ -19,9 +27,9 @@
   "k": 5,
   "hit_at_k": 1.0,
   "mrr": 0.6533,
-  "abstain_accuracy": 0.8,
-  "latency_ms_p50": 223.52,
-  "latency_ms_p95": 593.46,
+  "abstain_accuracy": 0.6,
+  "latency_ms_p50": 252.28,
+  "latency_ms_p95": 936.94,
   "cases": [
     {
       "question": "在构造 QA 数据时，为什么保留回答依据的文档片段？",
@@ -29,37 +37,37 @@
       "hit_at_k": 1.0,
       "reciprocal_rank": 1.0,
       "abstain_correct": null,
-      "latency_ms": 593.46,
+      "latency_ms": 936.94,
       "retrieved": [
         {
           "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
           "chunk_id": "ff35c56d4ba84946b5191cd4ef85b297",
           "page": 2,
-          "score": 0.6379
+          "score": 0.6384
         },
         {
           "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
           "chunk_id": "4f5119f8f89a436f9766a8251758c127",
           "page": 4,
-          "score": 0.634
+          "score": 0.6342
         },
         {
           "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
           "chunk_id": "d2d59374bb144b4a8140ac5816044110",
           "page": 3,
-          "score": 0.6288
+          "score": 0.6293
         },
         {
           "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
           "chunk_id": "4fdbf0344a484732823bd47170f73009",
           "page": 8,
-          "score": 0.6171
+          "score": 0.6176
         },
         {
           "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
           "chunk_id": "2b96f8589a6f4d10a1e77331d53b828d",
           "page": 8,
-          "score": 0.587
+          "score": 0.5872
         }
       ]
     },
@@ -69,7 +77,7 @@
       "hit_at_k": 1.0,
       "reciprocal_rank": 1.0,
       "abstain_correct": null,
-      "latency_ms": 223.52,
+      "latency_ms": 261.55,
       "retrieved": [
         {
           "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
@@ -109,7 +117,7 @@
       "hit_at_k": 1.0,
       "reciprocal_rank": 0.2,
       "abstain_correct": null,
-      "latency_ms": 216.91,
+      "latency_ms": 247.08,
       "retrieved": [
         {
           "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
@@ -149,7 +157,7 @@
       "hit_at_k": 1.0,
       "reciprocal_rank": 0.5,
       "abstain_correct": null,
-      "latency_ms": 223.51,
+      "latency_ms": 275.41,
       "retrieved": [
         {
           "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
@@ -189,7 +197,7 @@
       "hit_at_k": 1.0,
       "reciprocal_rank": 0.3333333333333333,
       "abstain_correct": null,
-      "latency_ms": 222.81,
+      "latency_ms": 252.28,
       "retrieved": [
         {
           "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
@@ -217,7 +225,7 @@
       "hit_at_k": 1.0,
       "reciprocal_rank": 0.25,
       "abstain_correct": null,
-      "latency_ms": 224.41,
+      "latency_ms": 252.06,
       "retrieved": [
         {
           "book_id": "b06218b7b5514394946139350ca513a0",
@@ -229,25 +237,25 @@
           "book_id": "b06218b7b5514394946139350ca513a0",
           "chunk_id": "3922df4d9af245d094473d29ca3d317c",
           "page": 111,
-          "score": 0.7814
+          "score": 0.7817
         },
         {
           "book_id": "b06218b7b5514394946139350ca513a0",
           "chunk_id": "d2f17a28d2004b789eeebf31a552ec56",
           "page": 114,
-          "score": 0.7735
+          "score": 0.7737
         },
         {
           "book_id": "b06218b7b5514394946139350ca513a0",
           "chunk_id": "e2aff11ac5244f7f92b93b0ae563721b",
           "page": 4,
-          "score": 0.7724
+          "score": 0.7726
         },
         {
           "book_id": "b06218b7b5514394946139350ca513a0",
           "chunk_id": "ac5c696c8c134fbdb4f475f70f7be25b",
           "page": 3,
-          "score": 0.7703
+          "score": 0.77
         }
       ]
     },
@@ -257,7 +265,7 @@
       "hit_at_k": 1.0,
       "reciprocal_rank": 1.0,
       "abstain_correct": null,
-      "latency_ms": 236.61,
+      "latency_ms": 225.7,
       "retrieved": [
         {
           "book_id": "b06218b7b5514394946139350ca513a0",
@@ -279,7 +287,7 @@
       "hit_at_k": 1.0,
       "reciprocal_rank": 1.0,
       "abstain_correct": null,
-      "latency_ms": 221.54,
+      "latency_ms": 270.84,
       "retrieved": [
         {
           "book_id": "b06218b7b5514394946139350ca513a0",
@@ -319,7 +327,7 @@
       "hit_at_k": 1.0,
       "reciprocal_rank": 0.25,
       "abstain_correct": null,
-      "latency_ms": 468.02,
+      "latency_ms": 224.27,
       "retrieved": [
         {
           "book_id": "b06218b7b5514394946139350ca513a0",
@@ -359,7 +367,7 @@
       "hit_at_k": 1.0,
       "reciprocal_rank": 1.0,
       "abstain_correct": null,
-      "latency_ms": 235.26,
+      "latency_ms": 260.84,
       "retrieved": [
         {
           "book_id": "b06218b7b5514394946139350ca513a0",
@@ -381,7 +389,7 @@
       "hit_at_k": null,
       "reciprocal_rank": null,
       "abstain_correct": true,
-      "latency_ms": 220.86,
+      "latency_ms": 237.43,
       "retrieved": []
     },
     {
@@ -389,9 +397,40 @@
       "granularity": "negative",
       "hit_at_k": null,
       "reciprocal_rank": null,
-      "abstain_correct": true,
-      "latency_ms": 220.55,
-      "retrieved": []
+      "abstain_correct": false,
+      "latency_ms": 253.51,
+      "retrieved": [
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "dda4df6379094c1da7f73ef6c40a8895",
+          "page": 2,
+          "score": 0.6192
+        },
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "00c0ba891c60406c8d685eb88f8f5ac1",
+          "page": 6,
+          "score": 0.6072
+        },
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "4e2821edcbf6428790d71fc4317e306f",
+          "page": 10,
+          "score": 0.5784
+        },
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "061aa4766f364a04817bd3cd6099f92a",
+          "page": 7,
+          "score": 0.5716
+        },
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "e02ca6eeb8f44c529828e6b41318fe32",
+          "page": 7,
+          "score": 0.5709
+        }
+      ]
     },
     {
       "question": "Milvus 的 IVF_FLAT 索引如何配置？",
@@ -399,7 +438,7 @@
       "hit_at_k": null,
       "reciprocal_rank": null,
       "abstain_correct": true,
-      "latency_ms": 452.8,
+      "latency_ms": 236.73,
       "retrieved": []
     },
     {
@@ -408,7 +447,7 @@
       "hit_at_k": null,
       "reciprocal_rank": null,
       "abstain_correct": true,
-      "latency_ms": 233.79,
+      "latency_ms": 257.24,
       "retrieved": []
     },
     {
@@ -417,7 +456,7 @@
       "hit_at_k": null,
       "reciprocal_rank": null,
       "abstain_correct": false,
-      "latency_ms": 206.97,
+      "latency_ms": 232.34,
       "retrieved": [
         {
           "book_id": "b06218b7b5514394946139350ca513a0",

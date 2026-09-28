@@ -13,9 +13,11 @@
    docker ps --filter name=milvus-standalone
    ```
 
-   首次启动会下载 Milvus 镜像，等待容器显示 `healthy`。本地地址默认是 `http://127.0.0.1:19530`；数据保存在 `deploy/volumes`。日常停止可执行 `.\milvus-standalone.bat stop`；不要使用脚本的 `delete` 命令，除非确实要清空知识库数据。
+   首次启动会下载 Milvus 镜像，等待容器显示 `healthy`。本地地址默认是 `http://127.0.0.1:19530`；数据保存在 Docker 命名卷 `llm-staudy-milvus-data`。日常停止可执行 `.\milvus-standalone.bat stop`。
 
-   后端启动后可访问 `http://127.0.0.1:8000/health/milvus` 确认连接。如果容器异常退出，先查看 `docker logs milvus-standalone`，保留 `deploy/volumes` 后使用 `docker start milvus-standalone` 重启。本地容器配置为 `unless-stopped` 自动重启；若反复出现 I/O 错误，需要检查 Docker Desktop 的文件共享和数据卷，不要直接删除数据卷。
+   后端启动后可访问 `http://127.0.0.1:8000/health/milvus` 确认连接。如果容器异常退出，先查看 `docker logs milvus-standalone`，然后使用 `docker start milvus-standalone` 重启。本地容器配置为 `unless-stopped` 自动重启；遇到数据卷 I/O 错误时先备份和检查 Docker Desktop，不要直接删除数据卷。
+
+   旧版 Windows 路径数据已在本机复制到命名卷；原目录 `deploy/volumes/milvus` 和已停止的 `milvus-standalone-bind-backup` 容器暂作备份。新环境直接运行上述启动命令即可，不需要旧目录。
 3. 安装并启动后端：
 
    ```powershell
@@ -80,7 +82,7 @@ python -m app.rag.evaluate_live evals/llm_books_answers.jsonl --user-id 你的�
 
 原始回答文件默认不纳入 Git；同目录的 `answers_live.metrics.json` 保存汇总与逐题评分。此命令会调用真实模型 API，产生实际请求费用。评测每道题使用独立的临时图状态，不使用生产会话中的长期记忆。
 
-在 2026-09-28 的本地基线中，两份已导入 PDF 共 168 个文本段；10 道页码标注题的 Hit@5 为 1.00、MRR 为 0.6533，5 道无依据反例的弃答准确率为 0.80；5 道回答样例的事实短语覆盖率、引用编号有效率、相关书籍命中率均为 1.00，回答延迟 P50 为 3.24 秒、最大约 4.92 秒。这些是小样本结果，不等于完整的事实准确率。首次评测曾出现一次约 281 秒的模型服务延迟；随后已将模型请求超时设为 60 秒并限制重试，以上回答指标来自调整后的重新运行。
+在 2026-09-28 的本地基线中，最初两份 PDF 共 168 个文本段，10 道页码标注题的 Hit@5 为 1.00、MRR 为 0.6533，5 道无依据反例的检索弃答准确率为 0.80。后来用户又导入两份资料，当前四份资料共 192 个文本段；同一评测集的 Hit@5 和 MRR 不变，但检索弃答准确率降为 0.60：两道反例检索到了主题相近但不足以回答的片段。完整回答链对“Agent 工具调用人工审批”明确表示依据不足，对“总结用户自己的简历”则走普通对话路径，请求用户提供简历内容。5 道正例回答的事实短语覆盖率、引用编号有效率、相关书籍命中率均为 1.00，回答延迟 P50 为 3.11 秒、最大约 4.80 秒。这些都是小样本和格式指标，不等于完整的事实准确率；新增书籍后应持续扩充标注集并人工复核答案。模型服务曾出现一次约 281 秒的异常延迟；目前模型请求超时设为 60 秒并限制重试，端到端超时仍可能略高于 60 秒。
 
 生产构建运行 `npm run build`。若前后端分开部署，把 `VITE_API_BASE_URL` 设为后端地址，并把前端来源加入后端的 `FRONTEND_ORIGINS`（逗号分隔）。
 

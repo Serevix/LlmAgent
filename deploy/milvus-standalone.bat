@@ -19,7 +19,7 @@ setlocal enabledelayedexpansion
 
 :main
 if "%1"=="" (
-    echo Please use standalone_embed.bat restart^|start^|stop^|delete
+    echo Please use milvus-standalone.bat restart^|start^|stop
     exit /b 1
 )
 
@@ -30,11 +30,9 @@ if "%1"=="restart" (
     call :start
 ) else if "%1"=="stop" (
     call :stop
-) else if "%1"=="delete" (
-    call :delete
 ) else (
     echo Unknown command.
-    echo Please use standalone_embed.bat restart^|start^|stop^|delete
+    echo Please use milvus-standalone.bat restart^|start^|stop
     exit /b 1
 )
 goto :eof
@@ -70,7 +68,7 @@ docker run -d ^
     -e ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml ^
     -e COMMON_STORAGETYPE=local ^
     -e DEPLOY_MODE=STANDALONE ^
-    -v "%cd%\volumes\milvus:/var/lib/milvus" ^
+    -v "llm-staudy-milvus-data:/var/lib/milvus" ^
     -v "%cd%\embedEtcd.yaml:/milvus/configs/embedEtcd.yaml" ^
     -v "%cd%\user.yaml:/milvus/configs/user.yaml" ^
     -p 19530:19530 ^
@@ -92,24 +90,31 @@ goto :eof
 
 :wait_for_milvus_running
 echo Wait for Milvus Starting...
+set /a wait_count=0
 :wait_loop
-for /f "tokens=*" %%A in ('docker ps ^| findstr "milvus-standalone" ^| findstr "healthy"') do set running=1
-if "!running!"=="1" (
+docker inspect --format "{{.State.Health.Status}}" milvus-standalone 2>nul | findstr /b healthy >nul
+if !errorlevel! equ 0 (
     echo Start successfully.
     echo To change the default Milvus configuration, edit user.yaml and restart the service.
-    goto :eof
+    exit /b 0
 )
-timeout /t 1 >nul
+set /a wait_count+=1
+if !wait_count! geq 180 (
+    echo Milvus did not become healthy within three minutes. Check docker logs milvus-standalone.
+    exit /b 1
+)
+ping -n 2 127.0.0.1 >nul
 goto wait_loop
 
 :start
-for /f "tokens=*" %%A in ('docker ps ^| findstr "milvus-standalone" ^| findstr "healthy"') do (
+docker inspect --format "{{.State.Health.Status}}" milvus-standalone 2>nul | findstr /b healthy >nul
+if %errorlevel% equ 0 (
     echo Milvus is running.
     exit /b 0
 )
 
-for /f "tokens=*" %%A in ('docker ps -a ^| findstr "milvus-standalone"') do set container_exists=1
-if defined container_exists (
+docker inspect milvus-standalone >nul 2>nul
+if %errorlevel% equ 0 (
     docker start milvus-standalone >nul
 ) else (
     call :run_embed
@@ -121,7 +126,7 @@ if %errorlevel% neq 0 (
 )
 
 call :wait_for_milvus_running
-goto :eof
+exit /b %errorlevel%
 
 :stop
 docker stop milvus-standalone >nul
@@ -131,34 +136,5 @@ if %errorlevel% neq 0 (
 )
 echo Stop successfully.
 goto :eof
-
-:delete_container
-for /f "tokens=*" %%A in ('docker ps ^| findstr "milvus-standalone"') do (
-    echo Please stop Milvus service before delete.
-    exit /b 1
-)
-docker rm milvus-standalone >nul
-if %errorlevel% neq 0 (
-    echo Delete Milvus container failed.
-    exit /b 1
-)
-echo Delete Milvus container successfully.
-goto :eof
-
-:delete
-set /p check="Please confirm if you'd like to proceed with the delete. This operation will delete the container and data. Confirm with 'y' for yes or 'n' for no. > "
-if /i "%check%"=="y" (
-    call :delete_container
-    rmdir /s /q "%cd%\volumes"
-    del /q embedEtcd.yaml
-    del /q user.yaml
-    echo Delete successfully.
-) else (
-    echo Exit delete
-    exit /b 0
-)
-goto :eof
-
-
 
 :EOF
