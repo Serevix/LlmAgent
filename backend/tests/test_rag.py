@@ -15,6 +15,7 @@ from app.main import app
 from app.memory.types import MemoryDecision
 from app.rag.evaluate import score_case
 from app.rag.evaluate_answers import score_answer
+from app.rag.grounding import GroundingDecision, citations_valid
 from app.rag.parser import parse_book, split_book
 from app.rag.types import BookChunk, RetrievedChunk
 from app.services.knowledge_service import KnowledgeService
@@ -30,6 +31,10 @@ def test_parse_and_split_book():
     assert score_case(["wrong", chunks[0].id], {chunks[0].id}) == (1.0, 0.5)
     assert score_answer("Checkpoint 保存状态 [1]", [{"book_id": "book-a"}],
                         ["保存状态"], {"book-a"})["valid_citations"] is True
+    assert score_answer("当前知识库没有足够依据回答这个问题。", [], [], set(),
+                        should_abstain=True)["abstain_correct"] is True
+    assert score_answer("当然可以，我知道答案。", [], [], set(),
+                        should_abstain=True)["abstain_correct"] is False
 
 
 def test_chat_graph_uses_book_sources(monkeypatch):
@@ -48,7 +53,9 @@ def test_chat_graph_uses_book_sources(monkeypatch):
 
         async def ainvoke(self, prompt):
             if self.schema is SearchPlan:
-                return SearchPlan(route="book_search", search_query="Checkpoint 是什么？")
+                return SearchPlan(search_query="Checkpoint 是什么？")
+            if self.schema is GroundingDecision:
+                return GroundingDecision(supported=True)
             return MemoryDecision(should_save=False)
 
     class FakeModel:
@@ -109,9 +116,9 @@ def test_chat_graph_abstains_without_book_evidence(monkeypatch):
     asyncio.run(run())
 
 
-def test_chat_graph_routes_greeting_without_search(monkeypatch):
-    async def unexpected_search(self, session, user_id, question):
-        raise AssertionError("普通问候不应检索书籍")
+def test_chat_graph_does_not_answer_from_model_without_book_evidence(monkeypatch):
+    async def empty_search(self, session, user_id, question):
+        return []
 
     class DecisionModel:
         def __init__(self, schema):
@@ -119,7 +126,7 @@ def test_chat_graph_routes_greeting_without_search(monkeypatch):
 
         async def ainvoke(self, prompt):
             if self.schema is SearchPlan:
-                return SearchPlan(route="direct", search_query="")
+                return SearchPlan(search_query="你好")
             return MemoryDecision(should_save=False)
 
     class FakeModel:
@@ -127,9 +134,9 @@ def test_chat_graph_routes_greeting_without_search(monkeypatch):
             return DecisionModel(schema)
 
         async def ainvoke(self, messages):
-            return AIMessage(content="你好！")
+            raise AssertionError("无书籍依据时不应调用回答模型")
 
-    monkeypatch.setattr(KnowledgeService, "search", unexpected_search)
+    monkeypatch.setattr(KnowledgeService, "search", empty_search)
     graph = build_chat_graph(FakeModel(), InMemorySaver(), InMemoryStore())
 
     async def run():
@@ -138,10 +145,54 @@ def test_chat_graph_routes_greeting_without_search(monkeypatch):
             config={"configurable": {"thread_id": "direct-test"}},
             context=ChatContext(user_id=7),
         )
-        assert result["route"] == "direct"
-        assert result["messages"][-1].content == "你好！"
+        assert result["route"] == "book_search"
+        assert "没有足够依据" in result["messages"][-1].content
 
     asyncio.run(run())
+
+
+def test_grounding_rejects_invalid_citations_and_unsupported_answer(monkeypatch):
+    hit = RetrievedChunk(BookChunk(id="c" * 32, book_id="b" * 32, user_id=7,
+                                   title="LangGraph 教材", page=4,
+                                   text="Checkpoint 保存图的状态。"), score=0.95)
+
+    async def fake_search(self, session, user_id, question):
+        return [hit]
+
+    class DecisionModel:
+        def __init__(self, schema):
+            self.schema = schema
+
+        async def ainvoke(self, prompt):
+            if self.schema is SearchPlan:
+                return SearchPlan(search_query="Checkpoint 是什么？")
+            if self.schema is GroundingDecision:
+                return GroundingDecision(supported=False)
+            return MemoryDecision(should_save=False)
+
+    class FakeModel:
+        def with_structured_output(self, schema):
+            return DecisionModel(schema)
+
+        async def ainvoke(self, messages):
+            return AIMessage(content="Checkpoint 会自动备份所有数据库 [1]。")
+
+    monkeypatch.setattr(KnowledgeService, "search", fake_search)
+    graph = build_chat_graph(FakeModel(), InMemorySaver(), None)
+
+    async def run():
+        result = await graph.ainvoke(
+            {"messages": [HumanMessage(content="Checkpoint 是什么？")]},
+            config={"configurable": {"thread_id": "unsupported-answer-test"}},
+            context=ChatContext(user_id=7),
+        )
+        assert "没有足够依据" in result["messages"][-1].content
+        assert result["messages"][-1].additional_kwargs["sources"] == []
+
+    asyncio.run(run())
+    assert citations_valid("它保存状态 [1]。", 1)
+    assert not citations_valid("它保存状态。", 1)
+    assert not citations_valid("它保存状态 [2]。", 1)
 
 
 def test_book_upload_requires_owner(tmp_path, monkeypatch):

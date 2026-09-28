@@ -60,19 +60,17 @@ async def chat_stream(data:ChatRequest,request: Request,session: AsyncSession = 
 
     async def event_stream() -> AsyncIterator[str]:
         try:
-            async for message, metadata in graph.astream(
+            result = await graph.ainvoke(
                 {"messages": [HumanMessage(content=data.message)]},
                 config=config,
                 context=context,
-                stream_mode="messages",
-            ):
-                if metadata.get("langgraph_node") not in {"model", "grounded_answer", "direct_answer"}:
-                    continue
-                if isinstance(message.content, str) and message.content:
-                    event_data = json.dumps({"type": "token", "content": message.content}, ensure_ascii=False)
-                    yield f"data: {event_data}\n\n"
-            state = await graph.aget_state(config)
-            sources = state.values.get("sources", [])
+            )
+            answer = result["messages"][-1]
+            content = str(answer.content)
+            for start in range(0, len(content), 24):
+                event_data = json.dumps({"type": "token", "content": content[start:start + 24]}, ensure_ascii=False)
+                yield f"data: {event_data}\n\n"
+            sources = answer.additional_kwargs.get("sources", [])
             yield f"data: {json.dumps({'type': 'sources', 'sources': sources}, ensure_ascii=False)}\n\n"
             yield 'data: {"type": "done"}\n\n'
         except Exception:

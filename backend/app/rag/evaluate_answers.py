@@ -15,7 +15,15 @@ CITATION = re.compile(r"\[(\d+)\]")
 
 
 def score_answer(answer: str, sources: list[dict], required_facts: list[str],
-                 relevant_book_ids: set[str]) -> dict:
+                 relevant_book_ids: set[str], should_abstain: bool = False) -> dict:
+    if should_abstain:
+        return {
+            "fact_coverage": None,
+            "valid_citations": None,
+            "relevant_source_hit": None,
+            "citation_numbers": [],
+            "abstain_correct": "当前知识库没有足够依据" in answer and not sources,
+        }
     if not required_facts and not relevant_book_ids:
         raise ValueError("每个答案至少需要标注 required_facts 或 relevant_book_ids")
     normalized = answer.casefold()
@@ -32,6 +40,7 @@ def score_answer(answer: str, sources: list[dict], required_facts: list[str],
         "valid_citations": valid_citations,
         "relevant_source_hit": source_hit,
         "citation_numbers": sorted(citation_numbers),
+        "abstain_correct": None,
     }
 
 
@@ -45,16 +54,20 @@ def evaluate(dataset: Path) -> dict:
         scores = score_answer(
             str(record["answer"]), record.get("sources", []),
             record.get("required_facts", []), set(record.get("relevant_book_ids", [])),
+            bool(record.get("should_abstain", False)),
         )
         cases.append({"question": record["question"], **scores})
     facts = [case["fact_coverage"] for case in cases if case["fact_coverage"] is not None]
     sources = [case["relevant_source_hit"] for case in cases
                if case["relevant_source_hit"] is not None]
+    citations = [case["valid_citations"] for case in cases if case["valid_citations"] is not None]
+    abstentions = [case["abstain_correct"] for case in cases if case["abstain_correct"] is not None]
     return {
         "count": len(cases),
         "fact_coverage": round(statistics.mean(facts), 4) if facts else None,
-        "valid_citation_rate": round(statistics.mean(case["valid_citations"] for case in cases), 4),
+        "valid_citation_rate": round(statistics.mean(citations), 4) if citations else None,
         "relevant_source_hit_rate": round(statistics.mean(sources), 4) if sources else None,
+        "abstain_accuracy": round(statistics.mean(abstentions), 4) if abstentions else None,
         "cases": cases,
     }
 

@@ -1,0 +1,46 @@
+{
+  "count": 3,
+  "fact_coverage": null,
+  "valid_citation_rate": null,
+  "relevant_source_hit_rate": null,
+  "abstain_accuracy": 1,
+  "cases": [
+    {
+      "question": "Agent 的工具调用如何做人工审批？",
+      "fact_coverage": null,
+      "valid_citations": null,
+      "relevant_source_hit": null,
+      "citation_numbers": [],
+      "abstain_correct": true
+    },
+    {
+      "question": "请帮我总结用户自己的简历",
+      "fact_coverage": null,
+      "valid_citations": null,
+      "relevant_source_hit": null,
+      "citation_numbers": [],
+      "abstain_correct": true
+    },
+    {
+      "question": "量子计算中的 Shor 算法怎样分解大整数？",
+      "fact_coverage": null,
+      "valid_citations": null,
+      "relevant_source_hit": null,
+      "citation_numbers": [],
+      "abstain_correct": true
+    }
+  ],
+  "evaluated_at": "2026-09-28T09:39:48.572815+00:00",
+  "chat_model": "openai:deepseek-ai/deepseek-v4-flash",
+  "embedding_model": "BAAI/bge-m3",
+  "min_score": 0.55,
+  "corpus_sha256": [
+    "44df274966abaf6ccca5f3a2c2c99ffa4cff639266fbf42d1cc03813f80d59d9",
+    "483114a67bb2f4bf8df6aebab442a61f07b024c96117631fd4367c3a16ffbcb8",
+    "55ee987f352f62b1788c783abedfa346245b65db518cf0ef818055469ace20e0",
+    "680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7",
+    "b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea"
+  ],
+  "latency_ms_p50": 3990.5,
+  "latency_ms_max": 6064.55
+}

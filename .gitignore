@@ -22,6 +22,7 @@ venv/
 logs/
 backend/data/
 backend/evals/answers_live*.jsonl
+backend/evals/abstention_live*.jsonl
 deploy/volumes/
 deploy/embedEtcd.yaml
 deploy/user.yaml

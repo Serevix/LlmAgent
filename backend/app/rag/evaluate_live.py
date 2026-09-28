@@ -62,6 +62,7 @@ async def evaluate_live(dataset: Path, user_id: int, output: Path) -> dict:
                 "latency_ms": round((perf_counter() - started) * 1000, 2),
                 "required_facts": case.get("required_facts", []),
                 "relevant_book_ids": [by_hash[item] for item in case.get("relevant_book_sha256", [])],
+                "should_abstain": bool(case.get("should_abstain", False)),
             }
             file.write(json.dumps(row, ensure_ascii=False) + "\n")
             file.flush()

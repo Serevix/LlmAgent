@@ -57,11 +57,8 @@ def test_register_login_and_owned_conversations(tmp_path):
                 assert (await client.get("/api/v1/conversations", headers=other_headers)).json() == []
 
                 class FakeGraph:
-                    async def astream(self, *args, **kwargs):
-                        yield AIMessage(content="你好"), {"langgraph_node": "grounded_answer"}
-
-                    async def aget_state(self, *args, **kwargs):
-                        return type("State", (), {"values": {"sources": []}})()
+                    async def ainvoke(self, *args, **kwargs):
+                        return {"messages": [AIMessage(content="你好", additional_kwargs={"sources": []})]}
 
                 app.state.chat_graph = FakeGraph()
                 streamed = await client.post("/api/v1/chat/stream", json={
