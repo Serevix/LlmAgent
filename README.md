@@ -2,6 +2,8 @@
 
 后端使用 FastAPI、LangGraph、PostgreSQL 和 Milvus。PostgreSQL 保存用户、会话与图状态；Milvus 保存 LLM 工程书籍的向量。前端仍是 `/login` 和 `/chat` 两个简易页面，书籍管理位于聊天页的“知识库”弹窗。
 
+理解项目的设计顺序、请求流程和各组件职责，可先阅读 [项目一运行原理与设计思路](docs/项目一运行原理与设计思路.md)。
+
 ## 启动
 
 1. 启动 PostgreSQL，将 `backend/.env.example` 复制为 `backend/.env`，并配置 `DATABASE_URL`、`JWT_SECRET_KEY`、`GuiJiLiuDong_API_KEY` 和 `GuiJiLiuDong_BASE_URL`。`DATABASE_URL` 使用 `postgresql+asyncpg://...` 格式。不要提交 `.env`。已有 `.env` 的项目只需补充示例中的 Milvus/Embedding 配置，默认值也可直接使用。
