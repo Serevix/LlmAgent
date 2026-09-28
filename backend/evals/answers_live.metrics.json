@@ -1,0 +1,63 @@
+{
+  "count": 5,
+  "fact_coverage": 1.0,
+  "valid_citation_rate": 1,
+  "relevant_source_hit_rate": 1,
+  "cases": [
+    {
+      "question": "QA 抽取后为什么要保留回答依据的上下文？",
+      "fact_coverage": 1.0,
+      "valid_citations": true,
+      "relevant_source_hit": true,
+      "citation_numbers": [
+        2
+      ]
+    },
+    {
+      "question": "为什么 QA 抽取代码要处理请求异常并保存中间结果？",
+      "fact_coverage": 1.0,
+      "valid_citations": true,
+      "relevant_source_hit": true,
+      "citation_numbers": [
+        1
+      ]
+    },
+    {
+      "question": "QA 抽取结果不能直接解析为 JSON 时，文档建议怎样处理？",
+      "fact_coverage": 1.0,
+      "valid_citations": true,
+      "relevant_source_hit": true,
+      "citation_numbers": [
+        5
+      ]
+    },
+    {
+      "question": "循环神经网络处理长期依赖时面临什么问题？",
+      "fact_coverage": 1.0,
+      "valid_citations": true,
+      "relevant_source_hit": true,
+      "citation_numbers": [
+        1
+      ]
+    },
+    {
+      "question": "部署 ChatGPT 模型时，书中提到了哪些优化技术？",
+      "fact_coverage": 1.0,
+      "valid_citations": true,
+      "relevant_source_hit": true,
+      "citation_numbers": [
+        3
+      ]
+    }
+  ],
+  "evaluated_at": "2026-09-28T02:30:07.670160+00:00",
+  "chat_model": "openai:deepseek-ai/deepseek-v4-flash",
+  "embedding_model": "BAAI/bge-m3",
+  "min_score": 0.55,
+  "corpus_sha256": [
+    "680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7",
+    "b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea"
+  ],
+  "latency_ms_p50": 3243.52,
+  "latency_ms_max": 4924.53
+}

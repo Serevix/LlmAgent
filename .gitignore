@@ -1,0 +1,33 @@
+# 环境变量和密钥
+.env
+backend/.env
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Conda / virtual env
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Testing
+.pytest_cache/
+
+# Logs
+*.log
+logs/
+backend/data/
+backend/evals/answers_live*.jsonl
+deploy/volumes/
+deploy/embedEtcd.yaml
+deploy/user.yaml
+
+# Frontend
+node_modules/
+dist/
+*.tsbuildinfo
+.next/

@@ -1,0 +1,431 @@
+{
+  "evaluated_at": "2026-09-28T02:28:53.663604+00:00",
+  "embedding_model": "BAAI/bge-m3",
+  "min_score": 0.55,
+  "milvus_collection": "llm_book_chunks_bge_m3",
+  "corpus": [
+    {
+      "sha256": "680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7",
+      "chunks": 19
+    },
+    {
+      "sha256": "b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea",
+      "chunks": 149
+    }
+  ],
+  "count": 15,
+  "positive_count": 10,
+  "negative_count": 5,
+  "k": 5,
+  "hit_at_k": 1.0,
+  "mrr": 0.6533,
+  "abstain_accuracy": 0.8,
+  "latency_ms_p50": 223.52,
+  "latency_ms_p95": 593.46,
+  "cases": [
+    {
+      "question": "在构造 QA 数据时，为什么保留回答依据的文档片段？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "abstain_correct": null,
+      "latency_ms": 593.46,
+      "retrieved": [
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "ff35c56d4ba84946b5191cd4ef85b297",
+          "page": 2,
+          "score": 0.6379
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "4f5119f8f89a436f9766a8251758c127",
+          "page": 4,
+          "score": 0.634
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "d2d59374bb144b4a8140ac5816044110",
+          "page": 3,
+          "score": 0.6288
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "4fdbf0344a484732823bd47170f73009",
+          "page": 8,
+          "score": 0.6171
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "2b96f8589a6f4d10a1e77331d53b828d",
+          "page": 8,
+          "score": 0.587
+        }
+      ]
+    },
+    {
+      "question": "为什么 QA 抽取过程需要保存中间结果并在请求失败时重试？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "abstain_correct": null,
+      "latency_ms": 223.52,
+      "retrieved": [
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "4f5119f8f89a436f9766a8251758c127",
+          "page": 4,
+          "score": 0.6891
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "d2d59374bb144b4a8140ac5816044110",
+          "page": 3,
+          "score": 0.6176
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "4fdbf0344a484732823bd47170f73009",
+          "page": 8,
+          "score": 0.601
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "ff35c56d4ba84946b5191cd4ef85b297",
+          "page": 2,
+          "score": 0.5768
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "c253a221669a43f2adee2908ff316f5d",
+          "page": 5,
+          "score": 0.5588
+        }
+      ]
+    },
+    {
+      "question": "QA 抽取后出现无法直接解析的 JSON 时怎样后处理？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 0.2,
+      "abstain_correct": null,
+      "latency_ms": 216.91,
+      "retrieved": [
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "4f5119f8f89a436f9766a8251758c127",
+          "page": 4,
+          "score": 0.6579
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "d2d59374bb144b4a8140ac5816044110",
+          "page": 3,
+          "score": 0.6045
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "0cdb673b06d648a19f99506321a49e3b",
+          "page": 6,
+          "score": 0.6038
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "ff35c56d4ba84946b5191cd4ef85b297",
+          "page": 2,
+          "score": 0.5991
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "269d061803e442e5a21f3ef4a10fcc0f",
+          "page": 7,
+          "score": 0.5987
+        }
+      ]
+    },
+    {
+      "question": "如何检查 QA 数据质量并过滤低质量问答？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 0.5,
+      "abstain_correct": null,
+      "latency_ms": 223.51,
+      "retrieved": [
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "ff35c56d4ba84946b5191cd4ef85b297",
+          "page": 2,
+          "score": 0.7001
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "4fdbf0344a484732823bd47170f73009",
+          "page": 8,
+          "score": 0.6988
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "4f5119f8f89a436f9766a8251758c127",
+          "page": 4,
+          "score": 0.6147
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "2b96f8589a6f4d10a1e77331d53b828d",
+          "page": 8,
+          "score": 0.6103
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "d2d59374bb144b4a8140ac5816044110",
+          "page": 3,
+          "score": 0.5818
+        }
+      ]
+    },
+    {
+      "question": "企业文档问答系统为什么需要先准备问题和回答数据？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 0.3333333333333333,
+      "abstain_correct": null,
+      "latency_ms": 222.81,
+      "retrieved": [
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "07fbfd3c92444d43b28b0ad6af976796",
+          "page": 1,
+          "score": 0.6167
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "2a434daf5c354db58bb4d5c84f69be83",
+          "page": 4,
+          "score": 0.5592
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "ff35c56d4ba84946b5191cd4ef85b297",
+          "page": 2,
+          "score": 0.5536
+        }
+      ]
+    },
+    {
+      "question": "ChatGPT 可以应用于哪些自然语言处理场景？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 0.25,
+      "abstain_correct": null,
+      "latency_ms": 224.41,
+      "retrieved": [
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "8186ecbb7b6e4b28af4be7cdef83d677",
+          "page": 115,
+          "score": 0.7836
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "3922df4d9af245d094473d29ca3d317c",
+          "page": 111,
+          "score": 0.7814
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "d2f17a28d2004b789eeebf31a552ec56",
+          "page": 114,
+          "score": 0.7735
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "e2aff11ac5244f7f92b93b0ae563721b",
+          "page": 4,
+          "score": 0.7724
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "ac5c696c8c134fbdb4f475f70f7be25b",
+          "page": 3,
+          "score": 0.7703
+        }
+      ]
+    },
+    {
+      "question": "循环神经网络处理长期依赖时有什么局限？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "abstain_correct": null,
+      "latency_ms": 236.61,
+      "retrieved": [
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "a4642c6a04954f57b6b1fc2766178c4e",
+          "page": 6,
+          "score": 0.6431
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "4cf889cc0a2b4d2f9a8df1e691e3d5ee",
+          "page": 5,
+          "score": 0.554
+        }
+      ]
+    },
+    {
+      "question": "ChatGPT 应用中的自然语言数据预处理包括哪些步骤？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "abstain_correct": null,
+      "latency_ms": 221.54,
+      "retrieved": [
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "efad873f13b04f758452cb6a80139cea",
+          "page": 7,
+          "score": 0.7916
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "ac5c696c8c134fbdb4f475f70f7be25b",
+          "page": 3,
+          "score": 0.7201
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "16bc92bdff1d486caee033f2d129e7ca",
+          "page": 6,
+          "score": 0.7051
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "226452e7c3eb42169a0add72df0d22d7",
+          "page": 4,
+          "score": 0.6977
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "ece31c23586f4bd7b608affb797f2633",
+          "page": 113,
+          "score": 0.6964
+        }
+      ]
+    },
+    {
+      "question": "部署 ChatGPT 模型时有哪些压缩或优化技术？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 0.25,
+      "abstain_correct": null,
+      "latency_ms": 468.02,
+      "retrieved": [
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "9206720865ff41f5ad8a7f55ec0f4484",
+          "page": 13,
+          "score": 0.6965
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "14bb2e7cfbfc4dc6bb57836a3f8bc7e0",
+          "page": 11,
+          "score": 0.6861
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "efad873f13b04f758452cb6a80139cea",
+          "page": 7,
+          "score": 0.6823
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "27b62695a5c14e43b22c40f7cdd6c15b",
+          "page": 8,
+          "score": 0.674
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "e5a1a3e3315241cbbb63aadbaf14276d",
+          "page": 110,
+          "score": 0.6537
+        }
+      ]
+    },
+    {
+      "question": "Transformer 编码器里的自注意力层和前馈网络各有什么作用？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "abstain_correct": null,
+      "latency_ms": 235.26,
+      "retrieved": [
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "08d58cdbf06447bdafbbef207d7f1e06",
+          "page": 9,
+          "score": 0.6997
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "8532dc840cb64fa391ff2596db08db84",
+          "page": 111,
+          "score": 0.5505
+        }
+      ]
+    },
+    {
+      "question": "LangGraph Store 如何跨线程共享记忆？",
+      "granularity": "negative",
+      "hit_at_k": null,
+      "reciprocal_rank": null,
+      "abstain_correct": true,
+      "latency_ms": 220.86,
+      "retrieved": []
+    },
+    {
+      "question": "Agent 的工具调用如何做人工审批？",
+      "granularity": "negative",
+      "hit_at_k": null,
+      "reciprocal_rank": null,
+      "abstain_correct": true,
+      "latency_ms": 220.55,
+      "retrieved": []
+    },
+    {
+      "question": "Milvus 的 IVF_FLAT 索引如何配置？",
+      "granularity": "negative",
+      "hit_at_k": null,
+      "reciprocal_rank": null,
+      "abstain_correct": true,
+      "latency_ms": 452.8,
+      "retrieved": []
+    },
+    {
+      "question": "量子计算中的 Shor 算法怎样分解大整数？",
+      "granularity": "negative",
+      "hit_at_k": null,
+      "reciprocal_rank": null,
+      "abstain_correct": true,
+      "latency_ms": 233.79,
+      "retrieved": []
+    },
+    {
+      "question": "请帮我总结用户自己的简历",
+      "granularity": "negative",
+      "hit_at_k": null,
+      "reciprocal_rank": null,
+      "abstain_correct": false,
+      "latency_ms": 206.97,
+      "retrieved": [
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "ff0a5159f7344f3f96d3387d3f604a44",
+          "page": 95,
+          "score": 0.5725
+        }
+      ]
+    }
+  ]
+}

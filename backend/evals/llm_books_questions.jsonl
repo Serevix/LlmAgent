@@ -1,0 +1,15 @@
+{"question":"在构造 QA 数据时，为什么保留回答依据的文档片段？","relevant_pages":[{"book_sha256":"680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7","pages":[2,3]}]}
+{"question":"为什么 QA 抽取过程需要保存中间结果并在请求失败时重试？","relevant_pages":[{"book_sha256":"680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7","pages":[4]}]}
+{"question":"QA 抽取后出现无法直接解析的 JSON 时怎样后处理？","relevant_pages":[{"book_sha256":"680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7","pages":[7]}]}
+{"question":"如何检查 QA 数据质量并过滤低质量问答？","relevant_pages":[{"book_sha256":"680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7","pages":[8]}]}
+{"question":"企业文档问答系统为什么需要先准备问题和回答数据？","relevant_pages":[{"book_sha256":"680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7","pages":[2]}]}
+{"question":"ChatGPT 可以应用于哪些自然语言处理场景？","relevant_pages":[{"book_sha256":"b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea","pages":[4]}]}
+{"question":"循环神经网络处理长期依赖时有什么局限？","relevant_pages":[{"book_sha256":"b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea","pages":[6]}]}
+{"question":"ChatGPT 应用中的自然语言数据预处理包括哪些步骤？","relevant_pages":[{"book_sha256":"b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea","pages":[7]}]}
+{"question":"部署 ChatGPT 模型时有哪些压缩或优化技术？","relevant_pages":[{"book_sha256":"b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea","pages":[8]}]}
+{"question":"Transformer 编码器里的自注意力层和前馈网络各有什么作用？","relevant_pages":[{"book_sha256":"b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea","pages":[9]}]}
+{"question":"LangGraph Store 如何跨线程共享记忆？","should_abstain":true}
+{"question":"Agent 的工具调用如何做人工审批？","should_abstain":true}
+{"question":"Milvus 的 IVF_FLAT 索引如何配置？","should_abstain":true}
+{"question":"量子计算中的 Shor 算法怎样分解大整数？","should_abstain":true}
+{"question":"请帮我总结用户自己的简历","should_abstain":true}

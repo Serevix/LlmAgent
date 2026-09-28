@@ -1,0 +1,5 @@
+{"question":"QA 抽取后为什么要保留回答依据的上下文？","relevant_book_sha256":["680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7"],"required_facts":["上下文","优化"]}
+{"question":"为什么 QA 抽取代码要处理请求异常并保存中间结果？","relevant_book_sha256":["680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7"],"required_facts":["重试","重复"]}
+{"question":"QA 抽取结果不能直接解析为 JSON 时，文档建议怎样处理？","relevant_book_sha256":["680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7"],"required_facts":["正则","JSON"]}
+{"question":"循环神经网络处理长期依赖时面临什么问题？","relevant_book_sha256":["b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea"],"required_facts":["梯度"]}
+{"question":"部署 ChatGPT 模型时，书中提到了哪些优化技术？","relevant_book_sha256":["b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea"],"required_facts":["压缩","剪枝"]}
