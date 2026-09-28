@@ -1,12 +1,28 @@
 {
-  "count": 3,
+  "count": 5,
   "fact_coverage": null,
   "valid_citation_rate": null,
   "relevant_source_hit_rate": null,
   "abstain_accuracy": 1,
   "cases": [
     {
+      "question": "LangGraph Store 如何跨线程共享记忆？",
+      "fact_coverage": null,
+      "valid_citations": null,
+      "relevant_source_hit": null,
+      "citation_numbers": [],
+      "abstain_correct": true
+    },
+    {
       "question": "Agent 的工具调用如何做人工审批？",
+      "fact_coverage": null,
+      "valid_citations": null,
+      "relevant_source_hit": null,
+      "citation_numbers": [],
+      "abstain_correct": true
+    },
+    {
+      "question": "Milvus 的 IVF_FLAT 索引如何配置？",
       "fact_coverage": null,
       "valid_citations": null,
       "relevant_source_hit": null,
@@ -30,7 +46,7 @@
       "abstain_correct": true
     }
   ],
-  "evaluated_at": "2026-09-28T09:39:48.572815+00:00",
+  "evaluated_at": "2026-09-28T09:45:25.335691+00:00",
   "chat_model": "openai:deepseek-ai/deepseek-v4-flash",
   "embedding_model": "BAAI/bge-m3",
   "min_score": 0.55,
@@ -41,6 +57,6 @@
     "680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7",
     "b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea"
   ],
-  "latency_ms_p50": 3990.5,
-  "latency_ms_max": 6064.55
+  "latency_ms_p50": 2852.07,
+  "latency_ms_max": 10237.92
 }
