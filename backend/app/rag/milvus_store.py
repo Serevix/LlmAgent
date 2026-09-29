@@ -10,10 +10,11 @@ class MilvusBookStore:
     """Vector storage only; PostgreSQL remains the source for book ownership/status."""
 
     def _client(self) -> MilvusClient:
-        options = {"uri": settings.MILVUS_URI, "timeout": 10}
-        if settings.MILVUS_TOKEN:
-            options["token"] = settings.MILVUS_TOKEN
-        return MilvusClient(**options)
+        return MilvusClient(
+            uri=settings.MILVUS_URI,
+            token=settings.MILVUS_TOKEN or "",
+            timeout=10,
+        )
 
     def _ping(self) -> None:
         client = self._client()
