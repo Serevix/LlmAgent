@@ -19,7 +19,7 @@
 
    后端启动后可访问 `http://127.0.0.1:8000/health/milvus` 确认连接。如果容器异常退出，先查看 `docker logs milvus-standalone`，然后使用 `docker start milvus-standalone` 重启。本地容器配置为 `unless-stopped` 自动重启；遇到数据卷 I/O 错误时先备份和检查 Docker Desktop，不要直接删除数据卷。
 
-   旧版 Windows 路径数据已在本机复制到命名卷；原目录 `deploy/volumes/milvus` 和已停止的 `milvus-standalone-bind-backup` 容器暂作备份。新环境直接运行上述启动命令即可，不需要旧目录。
+   旧版 Windows 路径数据已在本机复制到命名卷；旧备份容器已清理。原目录 `deploy/volumes/milvus` 仍保留在磁盘上，但当前容器不再挂载它。新环境直接运行上述启动命令即可，不需要旧目录。
 3. 安装并启动后端：
 
    ```powershell
