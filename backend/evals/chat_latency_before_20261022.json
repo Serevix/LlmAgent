@@ -1,0 +1,39 @@
+{
+  "chat_model": "openai:deepseek-ai/deepseek-v4-flash",
+  "retrieval_mode": "hybrid_rerank",
+  "note": "小样本连续请求，受网络与服务商负载影响；首字是待核对草稿。聊天调用数不包含 Embedding 和 rerank。",
+  "cases": [
+    {
+      "question": "在构造 QA 数据时，为什么保留回答依据的文档片段？",
+      "first_token_ms": 3336.22,
+      "final_answer_ms": 5379.36,
+      "done_ms": 9569.24,
+      "chat_calls": {
+        "grounded_answer": 2,
+        "save_memory": 1
+      },
+      "chat_call_count": 3,
+      "source_count": 3,
+      "refused": false
+    },
+    {
+      "question": "为什么 QA 抽取过程需要保存中间结果并在请求失败时重试？",
+      "first_token_ms": 16226.76,
+      "final_answer_ms": 20362.97,
+      "done_ms": 21875.2,
+      "chat_calls": {
+        "plan": 1,
+        "grounded_answer": 2,
+        "save_memory": 1
+      },
+      "chat_call_count": 4,
+      "source_count": 3,
+      "refused": false
+    }
+  ],
+  "measured_at": "2026-10-22T07:40:38.450034+00:00",
+  "temperature": 0,
+  "query_rewrite_mode": "always",
+  "memory_mode": "always",
+  "policy_note": "优化前实测：有前文即改写，每轮判断是否保存记忆。"
+}

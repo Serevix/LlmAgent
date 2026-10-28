@@ -1,0 +1,10 @@
+{
+  "completed": true,
+  "source_count": 3,
+  "score_types": [
+    "rerank"
+  ],
+  "answer_length": 40,
+  "refused": false,
+  "persistent_chat_written": false
+}

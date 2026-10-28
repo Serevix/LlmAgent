@@ -1,3 +1,5 @@
+"""会话关系表：关联用户、标题及 LangGraph 的 thread_id。"""
+
 from datetime import datetime,timezone
 from uuid import uuid4
 
@@ -5,6 +7,7 @@ from sqlmodel import Field,SQLModel
 
 
 class Conversation(SQLModel,table=True):
+    """一个用户拥有一个会话；thread_id 用于定位该会话的图状态。"""
     __tablename__ = "conversations"
     id: int | None = Field(default=None, primary_key=True)
     user_id: int = Field(foreign_key="users.id", index=True, nullable=False)

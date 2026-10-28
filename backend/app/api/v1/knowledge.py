@@ -1,3 +1,5 @@
+"""书籍接口：上传、查询状态、重试和删除；耗时导入交给后台任务。"""
+
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -15,6 +17,7 @@ router = APIRouter(prefix="/knowledge/books", tags=["knowledge"])
 @router.get("", response_model=list[BookRead])
 async def list_books(session: AsyncSession = Depends(get_session),
                      user: User = Depends(get_current_user)):
+    """仅列出登录用户的书籍和导入状态。"""
     assert user.id is not None
     return await KnowledgeBookRepository().list_by_user(session, user.id)
 
@@ -24,6 +27,7 @@ async def upload_book(background: BackgroundTasks, file: UploadFile = File(...),
                       title: str | None = Form(None),
                       session: AsyncSession = Depends(get_session),
                       user: User = Depends(get_current_user)):
+    """校验并保存文件，安排后台解析任务；202 只表示已接收。"""
     assert user.id is not None
     user_id = user.id
     service = KnowledgeService()
@@ -39,6 +43,7 @@ async def upload_book(background: BackgroundTasks, file: UploadFile = File(...),
 async def retry_book(book_id: str, background: BackgroundTasks,
                      session: AsyncSession = Depends(get_session),
                      user: User = Depends(get_current_user)):
+    """确认书籍归属后重置状态并安排再次导入。"""
     assert user.id is not None
     user_id = user.id
     repository = KnowledgeBookRepository()
@@ -57,6 +62,7 @@ async def retry_book(book_id: str, background: BackgroundTasks,
 @router.delete("/{book_id}", status_code=204)
 async def delete_book(book_id: str, session: AsyncSession = Depends(get_session),
                       user: User = Depends(get_current_user)):
+    """确认归属后删除向量、关系记录和原文件，处理中书籍不可删除。"""
     assert user.id is not None
     repository = KnowledgeBookRepository()
     book = await repository.get_owned(session, book_id, user.id)

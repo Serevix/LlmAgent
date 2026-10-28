@@ -1,8 +1,4 @@
-"""Score saved chat answers against a small, human-labeled question set.
-
-Each JSONL row contains answer, sources, required_facts, and relevant_book_ids.
-This measures coverage and citation use; human review is still needed for truth.
-"""
+"""回答评测：检查标注事实关键词、引用编号及来源命中；不能替代人工真实性检查。"""
 
 import argparse
 import json
@@ -16,6 +12,7 @@ CITATION = re.compile(r"\[(\d+)\]")
 
 def score_answer(answer: str, sources: list[dict], required_facts: list[str],
                  relevant_book_ids: set[str], should_abstain: bool = False) -> dict:
+    """统计事实关键词覆盖和引用有效性；负例单独判断是否正确弃答。"""
     if should_abstain:
         return {
             "fact_coverage": None,
@@ -45,6 +42,7 @@ def score_answer(answer: str, sources: list[dict], required_facts: list[str],
 
 
 def evaluate(dataset: Path) -> dict:
+    """读取已保存回答及标注，计算每题结果和汇总指标。"""
     records = [json.loads(line) for line in dataset.read_text(encoding="utf-8").splitlines()
                if line.strip()]
     if not records:
@@ -73,6 +71,7 @@ def evaluate(dataset: Path) -> dict:
 
 
 def main() -> None:
+    """解析命令行参数并写出回答评测结果。"""
     parser = argparse.ArgumentParser(description="评估回答的事实覆盖和引用格式")
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--output", type=Path, required=True)

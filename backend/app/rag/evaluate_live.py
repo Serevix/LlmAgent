@@ -1,4 +1,4 @@
-"""Run the real LangGraph answer path against labeled, locally available books."""
+"""运行真实模型和书籍检索工作流，保存回答并计算标注集指标。"""
 
 import argparse
 import asyncio
@@ -23,6 +23,7 @@ from app.rag.evaluate_answers import evaluate as score_file
 
 
 async def evaluate_live(dataset: Path, user_id: int, output: Path) -> dict:
+    """为各题运行真实聊天图，保存最终答案及来源后计算评测指标。"""
     cases = [json.loads(line) for line in dataset.read_text(encoding="utf-8").splitlines()
              if line.strip()]
     if not cases:
@@ -73,6 +74,10 @@ async def evaluate_live(dataset: Path, user_id: int, output: Path) -> dict:
         "evaluated_at": datetime.now(timezone.utc).isoformat(),
         "chat_model": settings.CHAT_MODEL,
         "embedding_model": settings.EMBEDDING_MODEL,
+        "retrieval_strategy": settings.RAG_RETRIEVAL_MODE,
+        "rerank_model": settings.RERANK_MODEL,
+        "rerank_min_score": settings.RERANK_MIN_SCORE,
+        "hybrid_collection": settings.MILVUS_HYBRID_COLLECTION,
         "min_score": settings.RAG_MIN_SCORE,
         "corpus_sha256": sorted(by_hash),
         "latency_ms_p50": round(statistics.median(latencies), 2),
@@ -82,6 +87,7 @@ async def evaluate_live(dataset: Path, user_id: int, output: Path) -> dict:
 
 
 def main() -> None:
+    """读取命令行参数，启动真实模型回答评测。"""
     parser = argparse.ArgumentParser(description="运行真实模型回答并评估引用和关键事实覆盖")
     parser.add_argument("dataset", type=Path)
     parser.add_argument("--user-id", type=int, required=True)

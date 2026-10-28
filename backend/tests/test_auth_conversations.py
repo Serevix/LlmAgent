@@ -10,6 +10,7 @@ from app.infrastructure.database.database import get_session
 from app.main import app
 from app.models.conversation import Conversation  # noqa: F401 - register table
 from app.models.user import User  # noqa: F401 - register table
+from app.agents.context import ContextBudgetError
 
 
 def test_register_login_and_owned_conversations(tmp_path):
@@ -57,8 +58,12 @@ def test_register_login_and_owned_conversations(tmp_path):
                 assert (await client.get("/api/v1/conversations", headers=other_headers)).json() == []
 
                 class FakeGraph:
-                    async def ainvoke(self, *args, **kwargs):
-                        return {"messages": [AIMessage(content="你好", additional_kwargs={"sources": []})]}
+                    async def astream(self, *args, **kwargs):
+                        assert kwargs["stream_mode"] == ["custom", "updates"]
+                        yield "custom", {"type": "token", "content": "你好"}
+                        yield "updates", {"grounded_answer": {"messages": [
+                            AIMessage(content="你好", additional_kwargs={"sources": []})
+                        ]}}
 
                 app.state.chat_graph = FakeGraph()
                 streamed = await client.post("/api/v1/chat/stream", json={
@@ -67,8 +72,28 @@ def test_register_login_and_owned_conversations(tmp_path):
                 assert streamed.status_code == 200, streamed.text
                 assert streamed.headers["content-type"].startswith("text/event-stream")
                 assert '"type": "token", "content": "你好"' in streamed.text
+                assert '"type": "answer", "content": "你好"' in streamed.text
                 assert '"type": "sources", "sources": []' in streamed.text
                 assert '"type": "done"' in streamed.text
+
+                class BudgetFailureGraph:
+                    async def ainvoke(self, *args, **kwargs):
+                        raise ContextBudgetError("本次问题过长，请拆分后发送。")
+
+                    async def astream(self, *args, **kwargs):
+                        raise ContextBudgetError("本次问题过长，请拆分后发送。")
+                        yield
+
+                app.state.chat_graph = BudgetFailureGraph()
+                headers = {"Authorization": f"Bearer {token}"}
+                request_body = {"conversation_id": conversation_id, "message": "长问题"}
+                budget_error = await client.post("/api/v1/chat", json=request_body, headers=headers)
+                assert budget_error.status_code == 422
+                assert budget_error.json()["detail"] == "本次问题过长，请拆分后发送。"
+                stream_error = await client.post("/api/v1/chat/stream", json=request_body, headers=headers)
+                assert '"type": "error"' in stream_error.text
+                assert "本次问题过长，请拆分后发送。" in stream_error.text
+                assert '"type": "done"' not in stream_error.text
 
                 blocked = await client.post("/api/v1/chat/stream", json={
                     "conversation_id": conversation_id, "message": "你好",

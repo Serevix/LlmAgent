@@ -1,0 +1,81 @@
+{
+  "chat_model": "openai:deepseek-ai/deepseek-v4-flash",
+  "image_model": "Kwai-Kolors/Kolors",
+  "cases": [
+    {
+      "question": "在构造 QA 数据时，为什么保留回答依据的文档片段？",
+      "elapsed_ms": 7271.79,
+      "source_count": 3,
+      "artifacts": [],
+      "refused": false
+    },
+    {
+      "question": "请将上一条已核对回答导出为 Word，标题为 QA依据学习笔记。",
+      "elapsed_ms": 6270.93,
+      "source_count": 0,
+      "artifacts": [
+        {
+          "id": "3be9e2833f1e75f1cfa6cbefd2197efe",
+          "kind": "word",
+          "title": "QA依据学习笔记",
+          "filename": "QA依据学习笔记.docx",
+          "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "size_bytes": 37105,
+          "download_url": "/api/v1/files/3be9e2833f1e75f1cfa6cbefd2197efe/content"
+        }
+      ],
+      "refused": false
+    },
+    {
+      "question": "请生成一张图片：蓝色背景，一本打开的书旁边有一个简洁的白色机器人，扁平插画，方形，不需要文字。",
+      "elapsed_ms": 9664.19,
+      "source_count": 0,
+      "artifacts": [
+        {
+          "id": "eb64817029be3138c8a0dc2ffe38fcc1",
+          "kind": "image",
+          "title": "白色机器人读书",
+          "filename": "白色机器人读书.png",
+          "media_type": "image/png",
+          "size_bytes": 1434531,
+          "download_url": "/api/v1/files/eb64817029be3138c8a0dc2ffe38fcc1/content"
+        }
+      ],
+      "refused": false
+    },
+    {
+      "case": "new_knowledge_word",
+      "elapsed_ms": 7642.72,
+      "source_count": 0,
+      "artifacts": [],
+      "refused": true,
+      "message_count": 2
+    },
+    {
+      "case": "new_knowledge_word_after_cli_registration_fix",
+      "elapsed_ms": 30647.89,
+      "source_count": 0,
+      "artifacts": [],
+      "refused": true,
+      "message_count": 2
+    },
+    {
+      "case": "new_knowledge_word_preprocessing",
+      "elapsed_ms": 27010.15,
+      "source_count": 5,
+      "artifacts": [
+        {
+          "id": "0608977f03f3df2293bed4b24f69302a",
+          "kind": "word",
+          "title": "ChatGPT应用中的自然语言数据预处理步骤",
+          "filename": "ChatGPT应用中的自然语言数据预处理步骤.docx",
+          "media_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+          "size_bytes": 37121,
+          "download_url": "/api/v1/files/0608977f03f3df2293bed4b24f69302a/content"
+        }
+      ],
+      "refused": false,
+      "message_count": 2
+    }
+  ]
+}

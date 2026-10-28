@@ -1,0 +1,434 @@
+{
+  "moduleName": "前端交互",
+  "moduleDescription": "React 与 TypeScript 构成两页学习助手，负责认证、会话、实时回答、书籍导入和模型选择。页面用组件状态组织交互，通过 HTTP 接口访问后端；localStorage 仅保存本应用的 JWT，会话历史、书籍索引和模型配置由服务端维护。",
+  "sections": [
+    {
+      "title": "背景知识：浏览器如何把状态变成两页应用",
+      "anchor": "practice-frontend-foundation",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "背景知识：HTTP 是浏览器与服务端交换请求和响应的方式，浏览器发出一次请求后，服务端会返回数据或错误。React 的状态可以理解为组件当前记住的数据：调用 setState 后，React 根据新状态重新绘制界面；useEffect 则安排请求、监听器等与界面之外的交互，并可返回清理函数。\n\n本项目只有登录页和聊天页，用浏览器 History API 同步地址栏与组件状态。main.tsx 把 App 挂到 root 节点；App 根据 JWT 是否存在选择页面。这里的判断只决定显示内容，真正能否访问用户数据仍须后端验证 JWT。开发时 Vite 在 5173 端口把 /api 请求代理到 127.0.0.1:8000，因此页面通常直接使用相对地址。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "浏览器入口 → App → /login 或 /chat",
+            "steps": [
+              {
+                "layer": "页面入口",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/App.tsx:276",
+                "functionName": "App()",
+                "explanation": "App 每次渲染时读取 getToken 的结果，再让 effect 校正地址栏路径。登录回调和退出回调都会调用 navigate，路径状态改变会触发重新渲染，让页面与凭据变化同步；仅检查字符串存在并不能判断 JWT 是否过期。",
+                "code": "export default function App() {\n  const { path, navigate } = usePath()\n  const authenticated = !!getToken()\n  // 令地址与登录状态一致；只是页面跳转，不能替代服务端 JWT 验证。\n  useEffect(() => {\n    if (!authenticated && path !== '/login') navigate('/login')\n    if (authenticated && path !== '/chat') navigate('/chat')\n  }, [authenticated, path])\n  if (!authenticated) return <Login onSuccess={() => navigate('/chat')} />\n  return <Chat onLogout={() => { clearToken(); navigate('/login') }} />",
+                "language": "typescript",
+                "keyPoint": "页面路由控制可见性，服务端鉴权控制数据访问。"
+              },
+              {
+                "layer": "路径状态",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/App.tsx:7",
+                "functionName": "usePath()",
+                "explanation": "usePath 把浏览器当前 pathname 放入 React 状态，并监听浏览器前进、后退。应用自己跳转时 pushState 不会触发 popstate，所以 navigate 还要主动 setPath；清理函数移除监听器，避免组件重新挂载后重复响应。",
+                "code": "function usePath() {\n  // 两页应用使用浏览器历史切换路径；监听前进/后退使 React 与地址栏一致。\n  const [path, setPath] = useState(window.location.pathname)\n  useEffect(() => {\n    // popstate 回调把地址栏的新路径同步到 React，不发起后端请求。\n    const update = () => setPath(window.location.pathname)\n    window.addEventListener('popstate', update)\n    return () => window.removeEventListener('popstate', update)\n  }, [])\n  // 应用内跳转更新地址和路径状态；pushState 本身不会触发 popstate。\n  const navigate = (next: string) => {\n    window.history.pushState(null, '', next)\n    setPath(next)\n  }",
+                "language": "typescript",
+                "keyPoint": "地址栏变化与 React 状态需要显式同步。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "前端没有独立的持久数据库或业务表。api.ts 的 Conversation、ChatMessage、Book、ModelOption 是接口数据的 TypeScript 类型，不是建表定义；messages 和 selectedModel 等 useState 数据在当前组件实例中保存。getToken、setToken、clearToken 只读写 llm_learning_token，模型 API Key 保存在填写过程的表单状态中，并通过后端接口提交。"
+        }
+      ]
+    },
+    {
+      "title": "登录注册：把一次认证结果用于后续请求",
+      "anchor": "practice-frontend-auth",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "HTTP 请求彼此独立，后续请求需要凭据才能让服务端识别用户。登录和注册共用一张受控表单：输入框的值来自组件状态，输入事件再更新状态；提交时根据当前标签选择接口。成功响应的 JWT 保存到 localStorage 后，父组件负责切到聊天页。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "POST /api/v1/auth/login 或 /api/v1/auth/register → 后续 JSON 请求",
+            "steps": [
+              {
+                "layer": "表单事件",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/App.tsx:35",
+                "functionName": "Login.submit()",
+                "explanation": "submit 阻止表单默认刷新，然后把用户名、密码以及注册时的邮箱序列化给 api。用户名和邮箱会去掉两端空格，密码保留原值；得到 access_token 后先保存凭据，再通知 App 进入聊天页，使页面切换后的请求能够携带身份。",
+                "code": "  async function submit(event: FormEvent<HTMLFormElement>) {\n    event.preventDefault()\n    setError('')\n    setBusy(true)\n    try {\n      const result = await api<{ access_token: string }>(mode === 'login' ? '/auth/login' : '/auth/register', {\n        method: 'POST',\n        body: JSON.stringify(mode === 'login' ? { username: username.trim(), password } : {\n          username: username.trim(), email: email.trim(), password,\n        }),\n      })\n      setToken(result.access_token)\n      onSuccess()",
+                "language": "typescript",
+                "keyPoint": "认证成功后先保存 JWT，再触发页面切换。"
+              },
+              {
+                "layer": "HTTP 边界",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/api.ts:54",
+                "functionName": "api<T>()",
+                "explanation": "api 把页面提供的相对路径补成 /api/v1 下的地址，并在有 token 时添加 Bearer 认证头。它把后端 JSON 结果交回对应页面，遇到非成功状态则提取错误并抛出；非登录接口返回 401 时会清除本地 JWT，204 则不尝试解析空响应体。",
+                "code": "export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {\n  // 普通接口统一携带登录 token；解析后端业务错误与浏览器连接错误。\n  const headers = new Headers(options.headers)\n  headers.set('Content-Type', 'application/json')\n  const token = getToken()\n  if (token) headers.set('Authorization', `Bearer ${token}`)\n  const response = await fetchResponse(`${base}/api/v1${path}`, { ...options, headers })\n  if (!response.ok) {\n    const data = await response.json().catch(() => null)\n    if (response.status === 401 && path !== '/auth/login') clearToken()\n    throw new Error(errorMessage(response.status, data))\n  }\n  if (response.status === 204) return undefined as T\n  return response.json() as Promise<T>",
+                "language": "typescript",
+                "keyPoint": "集中封装认证头与响应解析，页面只处理业务状态。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "提交期间 busy 禁用按钮，防止连续点击；catch 把错误写入可见提示，finally 恢复操作。localStorage 保存的是服务端签发的凭据，浏览器没有保存用户名密码用于自动重放登录。"
+        }
+      ]
+    },
+    {
+      "title": "会话创建与切换：为什么首次发送要跳过历史加载",
+      "anchor": "practice-frontend-conversation",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "会话编号让多轮对话归属于同一条服务端记录。左侧列表加载会话摘要，选择编号后单独读取历史；发送新问题时只提交会话编号和本次问题，无须把前端全部消息重新发回去。这样前端主要负责展示，历史恢复由服务端处理。\n\n“新建对话”按钮先清空当前选择，真正创建记录发生在第一次发送时。因此第一次发问同时会改变 selected 和追加消息，需要处理两种状态更新的相互影响。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "GET /api/v1/conversations；首次发送 POST /api/v1/conversations；切换 GET /api/v1/chat/{id}/history",
+            "steps": [
+              {
+                "layer": "首次发送",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/App.tsx:142",
+                "functionName": "Chat.send()",
+                "explanation": "没有会话编号时，send 用问题前 40 个字符创建标题，把返回的记录插到左侧并选择它。skipHistory 记录这次新编号，使随之触发的历史 effect 跳过一次读取，否则空历史可能覆盖刚追加的用户消息和 AI 流式占位。",
+                "code": "      if (conversationId === null) {\n        const created = await api<Conversation>('/conversations', {\n          method: 'POST',\n          body: JSON.stringify({ title: question.slice(0, 40) }),\n        })\n        conversationId = created.id\n        skipHistory.current = created.id\n        setSelected(created.id)\n        setConversations((items) => [created, ...items])\n      }\n      setMessages((items) => [...items, { role: 'user', content: question }, { role: 'assistant', content: '' }])\n      await streamChat(conversationId, question, (token) => {\n        setMessages((items) => items.map((item, index) => index === items.length - 1 ? { ...item, content: item.content + token } : item))",
+                "language": "typescript",
+                "keyPoint": "首次创建的 selected 变化不能覆盖正在生成的本地消息。"
+              },
+              {
+                "layer": "历史加载",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/App.tsx:110",
+                "functionName": "Chat() 中依赖 selected 的 useEffect",
+                "explanation": "会话列表点击事件改变 selected，这个 effect 随后清空旧消息并请求新会话历史，只保留用户和助手角色用于展示。alive 让快速切换后晚到的旧响应失去写入资格，避免 A 会话请求最后返回时把 B 会话界面覆盖。",
+                "code": "  useEffect(() => {\n    if (selected === null) { setMessages([]); return }\n    if (skipHistory.current === selected) { skipHistory.current = null; return }\n    let alive = true\n    setMessages([])\n    api<{ messages: ChatMessage[] }>(`/chat/${selected}/history`).then((result) => {\n      if (alive) setMessages(result.messages.filter((item) => item.role === 'user' || item.role === 'assistant'))\n    }).catch((cause) => { if (alive) setError(cause instanceof Error ? cause.message : '加载历史失败') })\n    return () => { alive = false }\n  }, [selected])",
+                "language": "typescript",
+                "keyPoint": "异步响应顺序可能不同于点击顺序，展示前要确认仍然有效。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "聊天过程中，创建和切换会话按钮都被 busy 禁用。这个限制让流回调可以持续更新最后一条 AI 消息，不必处理同一条流跨会话写入的问题；完成后刷新会话列表，使服务端更新后的摘要重新显示。"
+        }
+      ]
+    },
+    {
+      "title": "真正的流式展示：先拼 SSE 事件，再覆盖最终答案",
+      "anchor": "practice-frontend-stream",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "流式响应允许服务端逐步返回内容，页面无需等完整回答结束才显示文字。SSE 把事件写成文本帧，以空行分隔；浏览器每次读取的网络字节块却可能只有半帧，也可能包含多帧。因此网络读取块不能直接当作 JSON 事件。\n\n本项目用 fetch 发起 POST 并读取 ReadableStream，而不是等完整文本返回后做打字动画。token 事件逐段追加草稿，answer 事件提交核对后的最终答案；sources 与 status 分别驱动引用和进度显示，done 才表示流程正常完成。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "POST /api/v1/chat/stream → ReadableStream → SSE 回调 → React 消息",
+            "steps": [
+              {
+                "layer": "请求边界",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/api.ts:113",
+                "functionName": "streamChat()",
+                "explanation": "Chat.send 将当前会话编号、问题、模型编号和取消信号交给 streamChat。streamChat 统一附上 JWT 并发出 POST，服务端会依据 conversation_id 恢复上下文并依据 model_id 选择模型；浏览器无需上传整段历史。",
+                "code": "  const response = await fetchResponse(`${base}/api/v1/chat/stream`, {\n    method: 'POST',\n    headers: {\n      'Content-Type': 'application/json',\n      Authorization: `Bearer ${getToken() ?? ''}`,\n    },\n    body: JSON.stringify({ conversation_id: conversationId, message, model_id: modelId }),\n    signal,\n  })",
+                "language": "typescript",
+                "keyPoint": "单次请求携带本次问题与会话、模型标识。"
+              },
+              {
+                "layer": "流读取",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/api.ts:129",
+                "functionName": "streamChat()",
+                "explanation": "reader 持续读取字节，TextDecoder 通过流式选项处理中文字符可能跨字节块的情况。解码结果累加进 buffer，只有找到双换行才截取完整 SSE 事件，剩余半帧留给下一次读取；每个事件中的 data 行拼接后才进入 JSON 解析。",
+                "code": "  const reader = response.body.getReader()\n  // 一个网络读取块可能包含半个或多个 SSE 事件；缓存到双换行后才解析。\n  const decoder = new TextDecoder()\n  let buffer = ''\n  let done = false\n  while (!done) {\n    const chunk = await reader.read()\n    buffer += decoder.decode(chunk.value, { stream: !chunk.done }).replace(/\\r\\n/g, '\\n')\n    let boundary = buffer.indexOf('\\n\\n')\n    while (boundary !== -1) {\n      const event = buffer.slice(0, boundary)\n      buffer = buffer.slice(boundary + 2)\n      const data = event.split('\\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\\n')",
+                "language": "typescript",
+                "keyPoint": "字符边界、网络块边界、SSE 事件边界不是同一件事。"
+              },
+              {
+                "layer": "事件分派",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/api.ts:142",
+                "functionName": "streamChat()",
+                "explanation": "完整事件按 type 分派到 Chat 传入的回调：token 追加、answer 覆盖、sources 更新证据，status 更新提示。error 会中止流程并交给页面处理，若读取结束却没有 done，也会报告连接中断，防止把不完整结果当成成功。",
+                "code": "      if (data) {\n        const parsed = JSON.parse(data) as { type: string; content?: string; sources?: Source[]; pending?: boolean; artifacts?: Artifact[] }\n        if (parsed.type === 'token') onToken(parsed.content ?? '')\n        if (parsed.type === 'answer') onAnswer(parsed.content ?? '')\n        if (parsed.type === 'status') onStatus(parsed.content ?? '')\n        if (parsed.type === 'sources') onSources(parsed.sources ?? [], parsed.pending === true)\n        if (parsed.type === 'artifacts') onArtifacts(parsed.artifacts ?? [])\n        if (parsed.type === 'error') throw new Error(parsed.content ?? '生成回复失败')\n        if (parsed.type === 'done') done = true\n      }\n      boundary = buffer.indexOf('\\n\\n')\n    }\n    if (chunk.done) break\n  }",
+                "language": "typescript",
+                "keyPoint": "响应体结束不等于业务流程成功，done 是显式完成信号。"
+              },
+              {
+                "layer": "消息状态",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/App.tsx:152",
+                "functionName": "Chat.send()",
+                "explanation": "send 先放入用户消息与空助手消息，再用函数式 setMessages 更新最后一项，避免回调捕获旧数组。token 回调追加内容，来源回调记录是否仍为候选，answer 回调则用最终文本覆盖草稿并设置 answerFinalized，避免重复拼接或保留核对前的内容。",
+                "code": "      setMessages((items) => [...items, { role: 'user', content: question }, { role: 'assistant', content: '' }])\n      await streamChat(conversationId, question, (token) => {\n        setMessages((items) => items.map((item, index) => index === items.length - 1 ? { ...item, content: item.content + token } : item))\n      }, (sources, pending) => {\n        setMessages((items) => items.map((item, index) => index === items.length - 1 ? { ...item, sources, sourcesPending: pending } : item))\n      }, controller.signal, (answer) => {\n        // 用核对后的最终答案覆盖流式草稿，避免重复拼接或保留被否决的内容。\n        answerFinalized = true\n        setStreamStatus('')\n        setMessages((items) => items.map((item, index) => index === items.length - 1 ? { ...item, content: answer } : item))\n      }, setStreamStatus, selectedModel, (artifacts) => {",
+                "language": "typescript",
+                "keyPoint": "流式草稿是临时展示，最终 answer 是覆盖操作。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "知识库导入：上传完成与索引完成是两个阶段",
+      "anchor": "practice-frontend-knowledge",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "上传文件只解决把字节送到服务端，书籍解析、切分和向量化还需要时间。知识库面板因此把导入设计为上传后查询状态：processing 表示仍在处理，ready 才显示已索引的片段数，failed 显示错误并提供重试。\n\n面板每三秒读取一次服务端书籍列表，用最新记录替换界面。前端不自行解析书籍、不保存向量，也不根据上传 HTTP 成功就宣布知识库可检索。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "POST /api/v1/knowledge/books → 周期 GET /api/v1/knowledge/books",
+            "steps": [
+              {
+                "layer": "文件上传边界",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/api.ts:71",
+                "functionName": "uploadBook()",
+                "explanation": "KnowledgePanel.upload 把选中的 File 和标题传给 uploadBook，后者用 FormData 构造 multipart 请求。这里不能套用 JSON 请求封装的 Content-Type，因为浏览器必须自动生成 multipart 分隔边界；成功返回的书籍记录只代表本次上传响应。",
+                "code": "export async function uploadBook(file: File, title: string): Promise<Book> {\n  // 上传使用 FormData，浏览器自动添加 multipart 边界，不能手写 JSON Content-Type。\n  const body = new FormData()\n  body.append('file', file)\n  if (title.trim()) body.append('title', title.trim())\n  const response = await fetchResponse(`${base}/api/v1/knowledge/books`, {\n    method: 'POST', body,\n    headers: { Authorization: `Bearer ${getToken() ?? ''}` },\n  })\n  if (!response.ok) throw new Error(errorMessage(response.status, await response.json().catch(() => null)))\n  return response.json() as Promise<Book>",
+                "language": "typescript",
+                "keyPoint": "文件请求与 JSON 请求需要不同的请求体编码。"
+              },
+              {
+                "layer": "面板轮询",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/App.tsx:230",
+                "functionName": "KnowledgePanel.refresh() / KnowledgePanel() 中的 useEffect",
+                "explanation": "refresh 从服务端读取最新列表并交给 setBooks，挂载 effect 立即执行一次，再每三秒执行。卸载时清理 interval，避免面板关闭后继续发起轮询；已经发出的请求并没有在这里被取消，状态是否 ready 仍由服务端记录决定。",
+                "code": "  async function refresh() {\n    try { setBooks(await api<Book[]>('/knowledge/books')) }\n    catch (cause) { setError(cause instanceof Error ? cause.message : '加载书籍失败') }\n  }\n\n  // 挂载即加载，之后每三秒刷新；卸载清理定时器，不继续轮询。\n  useEffect(() => {\n    void refresh()\n    const timer = window.setInterval(() => { void refresh() }, 3000)\n    return () => window.clearInterval(timer)\n  }, [])",
+                "language": "typescript",
+                "keyPoint": "轮询反馈后台任务状态，清理定时器防止继续查询。"
+              },
+              {
+                "layer": "上传事件",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/App.tsx:243",
+                "functionName": "KnowledgePanel.upload()",
+                "explanation": "upload 读取面板当前的文件和标题，交给 uploadBook 发送，成功后清空组件保存的文件与标题并触发列表刷新。它只负责上传动作的 busy 状态，随后看到 processing 仍须等待轮询转为 ready；错误会显示在面板中，finally 保证按钮恢复。",
+                "code": "  async function upload(event: FormEvent<HTMLFormElement>) {\n    event.preventDefault()\n    if (!file) return\n    setBusy(true); setError('')\n    try { await uploadBook(file, title); setFile(null); setTitle(''); await refresh() }\n    catch (cause) { setError(cause instanceof Error ? cause.message : '上传失败') }\n    finally { setBusy(false) }",
+                "language": "typescript",
+                "keyPoint": "上传响应成功之后，还要以服务端状态确认索引完成。"
+              },
+              {
+                "layer": "失败后的操作",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/App.tsx:253",
+                "functionName": "KnowledgePanel.act()",
+                "explanation": "失败书籍的重试按钮给 act 传入对应 retry 路径和 POST，删除按钮传入书籍路径和 DELETE。act 统一管理 busy、错误提示与操作后的列表刷新，使这两种操作都以服务端实际状态作为界面依据；界面仅在非 processing 时显示删除入口。",
+                "code": "  async function act(path: string, method: 'POST' | 'DELETE') {\n    setBusy(true); setError('')\n    try { await api(path, { method }); await refresh() }\n    catch (cause) { setError(cause instanceof Error ? cause.message : '操作失败') }\n    finally { setBusy(false) }\n  }",
+                "language": "typescript",
+                "keyPoint": "重试和删除改变服务端任务记录，成功后重新读取列表。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "模型参数管理：导入、测试、保存与选择的职责",
+      "anchor": "practice-frontend-models",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "这里的“导入模型”是导入兼容 OpenAI 的服务参数 JSON，内容包括模型名称、接口地址、窗口与采样参数，不是上传模型权重。配置表单、保存的模型列表和聊天时选中的 model_id 是三份不同状态：导入只填写表单，测试检查当前参数，保存才创建服务端配置并选中它。\n\n选中模型存放在 Chat.selectedModel，下一次请求将它作为 model_id 发出；切换选项不会重新加载会话历史。面板通过 createPortal 渲染到 document.body，表单提交同时阻止默认行为和事件冒泡，避免影响外层聊天输入表单。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "本地 JSON → 模型表单；POST /api/v1/models/test；POST /api/v1/models → 下一次聊天 model_id",
+            "steps": [
+              {
+                "layer": "配置解析",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ModelControls.tsx:19",
+                "functionName": "parseModelConfig()",
+                "explanation": "importFile 最多读取 64 KB 文件文本，再交给 parseModelConfig 验证。解析器要求顶层为对象、拒绝未知字段，并验证 model、base_url、api_key 与数值；缺失的可选值使用默认值，导入内容只转为表单数据，不执行文件内容。",
+                "code": "export function parseModelConfig(text: string): ModelForm {\n  // 导入的是 API 参数 JSON，不执行文件内容，也不接收模型权重。\n  const value: unknown = JSON.parse(text)\n  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('模型参数文件必须是 JSON 对象。')\n  const data = value as Record<string, unknown>\n  const allowed = Object.keys(emptyForm())\n  if (Object.keys(data).some((key) => !allowed.includes(key))) throw new Error('参数包含未知字段，请参考示例格式。')\n  if (typeof data.model !== 'string' || typeof data.base_url !== 'string') throw new Error('参数文件必须包含 model 和 base_url。')\n  if (data.api_key !== undefined && typeof data.api_key !== 'string') throw new Error('api_key 必须是字符串。')\n  // 从导入对象读取数值，缺失时使用默认值；非有限数字立即拒绝。\n  const numeric = (key: string, fallback: number): number => {\n    const result = data[key] === undefined ? fallback : Number(data[key])\n    if (!Number.isFinite(result)) throw new Error(`${key} 必须是有效数字。`)\n    return result",
+                "language": "typescript",
+                "keyPoint": "参数文件是受约束的数据，解析成功也不自动发送或保存。"
+              },
+              {
+                "layer": "本地导入",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ModelControls.tsx:108",
+                "functionName": "ModelControls.importFile()",
+                "explanation": "importFile 读取浏览器选择的文件，将成功解析的结果放入 form 并显示待确认提示。它先清空文件控件的 value，便于用户再次选择同一文件；导入阶段没有调用 api，API Key 只有在测试或保存时才提交后端。",
+                "code": "  async function importFile(event: ChangeEvent<HTMLInputElement>) {\n    const file = event.target.files?.[0]\n    event.target.value = ''\n    if (!file) return\n    setError(''); setNotice('')\n    try {\n      if (file.size > 64 * 1024) throw new Error('参数文件不能超过 64 KB。')\n      setForm(parseModelConfig(await file.text()))\n      setNotice('参数已导入，请确认后保存。')\n    } catch (cause) { setError(cause instanceof SyntaxError ? 'JSON 格式不正确。' : cause instanceof Error ? cause.message : '导入参数失败') }\n  }",
+                "language": "typescript",
+                "keyPoint": "导入填表与向服务端提交分开执行。"
+              },
+              {
+                "layer": "参数转换",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ModelControls.tsx:78",
+                "functionName": "ModelControls.parameters()",
+                "explanation": "parameters 在发请求前裁剪显示名称、模型标识和地址的两端空白。输入框中的可选 temperature 与 top_p 用字符串保留空白状态，提交时空串变为 null，已填写才转数字，让服务端区分未指定与显式数值。",
+                "code": "  function parameters() {\n    return { ...form, name: form.name.trim(), model: form.model.trim(), base_url: form.base_url.trim(),\n      temperature: form.temperature === '' ? null : Number(form.temperature),\n      top_p: form.top_p === '' ? null : Number(form.top_p) }\n  }",
+                "language": "typescript",
+                "keyPoint": "空值表达“使用默认行为”，不能盲目转换成零。"
+              },
+              {
+                "layer": "连接测试",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ModelControls.tsx:98",
+                "functionName": "ModelControls.test()",
+                "explanation": "test 将当前表单经 parameters 转换后发给 /models/test，把服务端返回的 message 放入 notice。它不把配置加入模型列表，也不改变 selected，因此用户可以先验证配置是否能满足流式和结构化输出要求，再决定保存；界面提示该调用可能产生少量费用。",
+                "code": "  async function test() {\n    setBusy(true); setError(''); setNotice('')\n    try {\n      const result = await api<{ message: string }>('/models/test', { method: 'POST', body: JSON.stringify(parameters()) })\n      setNotice(result.message)\n    } catch (cause) { setError(cause instanceof Error ? cause.message : '连接测试失败') }\n    finally { setBusy(false) }\n  }",
+                "language": "typescript",
+                "keyPoint": "测试使用当前参数，保存与选中是后续独立动作。"
+              },
+              {
+                "layer": "保存并选择",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ModelControls.tsx:85",
+                "functionName": "ModelControls.save()",
+                "explanation": "save 提交 parameters 的结果，只有服务端返回新 ModelOption 后才追加列表并调用父组件 onSelect。成功时清空表单并关闭面板，明文 API Key 随表单状态一起清除；catch 保留错误提示让用户修正，而 finally 恢复按钮。",
+                "code": "  async function save(event: FormEvent<HTMLFormElement>) {\n    event.preventDefault(); event.stopPropagation()\n    setBusy(true); setError(''); setNotice('')\n    try {\n      const created = await api<ModelOption>('/models', { method: 'POST', body: JSON.stringify(parameters()) })\n      setModels((items) => [...items, created])\n      onSelect(created.id)\n      setForm(emptyForm()); setOpen(false)\n    } catch (cause) { setError(cause instanceof Error ? cause.message : '保存模型失败') }\n    finally { setBusy(false) }\n  }",
+                "language": "typescript",
+                "keyPoint": "服务端确认创建后，再把配置变成可选的 model_id。"
+              },
+              {
+                "layer": "删除选择",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ModelControls.tsx:121",
+                "functionName": "ModelControls.remove()",
+                "explanation": "remove 把待删除模型编号交给服务端，成功后从当前 options 中移除该记录。若它恰好是父组件当前选择，则回退为 default，避免下一次聊天引用已删除编号；关闭面板也会调用 emptyForm 清空表单凭据，不把密钥写入 localStorage。",
+                "code": "  async function remove(model: ModelOption) {\n    setBusy(true); setError(''); setNotice('')\n    try {\n      await api(`/models/${model.id}`, { method: 'DELETE' })\n      setModels((items) => items.filter((item) => item.id !== model.id))\n      if (selected === model.id) onSelect('default')\n    } catch (cause) { setError(cause instanceof Error ? cause.message : '删除模型失败') }\n    finally { setBusy(false) }\n  }",
+                "language": "typescript",
+                "keyPoint": "配置生命周期与聊天历史独立，删除当前配置要修正选择。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "回答与引用：Markdown、候选来源和原文摘录",
+      "anchor": "practice-frontend-render",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "助手回答需要展示标题、列表、代码和表格，所以使用 react-markdown 与 remark-gfm；用户输入按普通文字显示。skipHtml 让回答中的原始 HTML 被跳过，避免把模型返回的 HTML 当作页面结构直接执行或插入。\n\n检索出的候选片段不等于最终使用的证据，因此来源只有在助手已有内容、来源非空且 sourcesPending 为 false 时才显示详情入口。详情默认折叠，展开后显示引用编号、书名、页码或段号及摘录，明确它是检索片段而非完整书页。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "ChatMessage → Markdown 回答 → 最终来源 details",
+            "steps": [
+              {
+                "layer": "消息展示",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/MessageContent.tsx:31",
+                "functionName": "MessageContent()",
+                "explanation": "Chat 把单条 ChatMessage 交给 MessageContent，组件依据 role 决定使用 Markdown 还是直接展示文本。引用入口的多个条件把空回答、无来源和候选阶段排除在外，让 token 草稿显示期间不会提前把候选证据作为最终依据展示。",
+                "code": "export function MessageContent({ message }: {\n  message: ChatMessage\n}) {\n  return <>\n    {!!message.content && <div className={`bubble ${message.role === 'assistant' ? 'markdown' : ''}`}>\n      {message.role === 'assistant'\n        ? <Markdown remarkPlugins={[remarkGfm]} skipHtml>{message.content}</Markdown>\n        : message.content}\n    </div>}\n    {message.role === 'assistant' && message.artifacts?.map((artifact) => <ArtifactCard key={artifact.id} artifact={artifact} />)}\n    {message.role === 'assistant' && !!message.content && !!message.sources?.length && !message.sourcesPending && <details className=\"reference-details\">\n      <summary><span className=\"details-show\">展示详情</span><span className=\"details-hide\">收起详情</span></summary>\n      <div className=\"sources sources-expanded\">\n      <div className=\"sources-heading\"><strong>参考文献</strong><span>{message.sources.length} 个片段</span></div>",
+                "language": "typescript",
+                "keyPoint": "回答正文可持续变化，来源详情等待最终证据状态。"
+              },
+              {
+                "layer": "摘录处理",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/MessageContent.tsx:7",
+                "functionName": "formatSourceExcerpt()",
+                "explanation": "MessageContent 遍历来源时把 excerpt 交给这个函数，只为界面规范化字符和清理 PDF 控制字符。函数用多行代码特征判断是否更适合 pre/code 展示；普通正文则在后续逻辑合并软换行，同时保留段落，不改写服务端存储或检索证据。",
+                "code": "export function formatSourceExcerpt(excerpt: string) {\n  // 只清理展示文本，兼容 PDF 控制字符及其字面转义，不修改知识库原文。\n  const text = excerpt.normalize('NFKC')\n    .replace(/\\\\u00(?:0[0-8bcef]|1[0-9a-f])|\\\\u007f/gi, ' ')\n    .replace(/[\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f\\u007f]/g, ' ')\n    .replace(/\\r\\n?/g, '\\n')\n    .trim()\n  const lines = text.split('\\n')\n  const codeLines = lines.filter((line) => /^\\s*(?:from\\s+\\w|import\\s+\\w|async\\s*def\\b|def\\s+|class\\s*\\w|await\\s+|return\\b|if\\s+|for\\s+|#|[\"'][\\w-]+[\"']\\s*:|[\\w.]+\\s*=)/.test(line))\n  const isCode = codeLines.length >= 2\n  if (isCode) return { text, isCode }",
+                "language": "typescript",
+                "keyPoint": "展示清理与知识库原文分离，引用仍指向原片段。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "source.page 大于零展示“第 n 页”，否则展示相反数对应的“第 n 段”；chunk_id 用作来源项 key。style.css 让代码块横向滚动、长摘录限制高度，并为 Markdown 表格和窄屏调整布局，保持简易界面在长回答下仍可阅读。"
+        },
+        {
+          "type": "text",
+          "text": "生成附件更新：MessageContent 现在还遍历 message.artifacts 渲染 ArtifactCard。图片通过认证接口读取为 Blob 后预览，Word 点击按钮下载；刷新后从历史消息恢复同样的附件描述，不依赖临时的服务商图片 URL。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "SSE artifacts / 历史附件 → ArtifactCard → Bearer 请求 → Blob",
+            "steps": [
+              {
+                "layer": "认证下载",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/api.ts:85",
+                "functionName": "artifactBlob()",
+                "explanation": "浏览器按附件 ID 请求后端文件内容，并在 Authorization 中携带现有登录凭据。下载地址不拼接 token，也不直接访问模型返回的外部地址，错误统一显示中文提示。",
+                "code": "export async function artifactBlob(id: string, signal?: AbortSignal): Promise<Blob> {\n  const response = await fetchResponse(`${base}/api/v1/files/${encodeURIComponent(id)}/content`, {\n    headers: { Authorization: `Bearer ${getToken() ?? ''}` }, signal,\n  })\n  if (!response.ok) {\n    if (response.status === 401) clearToken()\n    throw new Error(errorMessage(response.status, await response.json().catch(() => null)))\n  }\n  return response.blob()\n}",
+                "language": "python",
+                "keyPoint": "认证文件通过 fetch 读取，不能直接把私有地址当作公开链接。"
+              },
+              {
+                "layer": "消息附件",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ArtifactCard.tsx:5",
+                "functionName": "ArtifactCard() → useEffect()",
+                "explanation": "图片卡片挂载后读取文件并创建 Blob URL，组件卸载时取消尚未完成的请求并释放地址。Word 按钮调用 download 读取文件，浏览器再根据附件文件名触发保存，前端不参与正文生成。",
+                "code": "export function ArtifactCard({ artifact }: { artifact: Artifact }) {\n  const [preview, setPreview] = useState('')\n  const [error, setError] = useState('')\n  const [busy, setBusy] = useState(false)\n\n  useEffect(() => {\n    if (artifact.kind !== 'image') return\n    const controller = new AbortController()\n    let url = ''\n    artifactBlob(artifact.id, controller.signal).then((blob) => {\n      if (!controller.signal.aborted) {\n        url = URL.createObjectURL(blob)\n        setPreview(url)",
+                "language": "python",
+                "keyPoint": "Blob URL 属于页面资源，需要在卸载后释放。"
+              },
+              {
+                "layer": "点击保存",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ArtifactCard.tsx:26",
+                "functionName": "download()",
+                "explanation": "下载时可复用已加载的图片预览，Word 则在点击后取得文件并创建临时链接。浏览器开始下载后释放临时地址，失败只影响该附件提示，不清空会话历史。",
+                "code": "  async function download() {\n    setBusy(true)\n    setError('')\n    let url = ''\n    try {\n      url = preview || URL.createObjectURL(await artifactBlob(artifact.id))\n      const link = document.createElement('a')\n      link.href = url\n      link.download = artifact.filename\n      document.body.appendChild(link)\n      link.click()\n      link.remove()\n      // 延迟释放，让浏览器有机会开始下载；预览地址由 effect 管理。\n      if (!preview) { const downloadUrl = url; window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000) }",
+                "language": "python",
+                "keyPoint": "界面只负责展示与下载，不保存服务端密钥。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "失败、卸载与总结：异步页面必须处理的收尾",
+      "anchor": "practice-frontend-lifecycle",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "网络错误、生成失败、用户离开页面是三类不同事件：前两者需要可读提示，主动取消通常无需展示业务失败。页面同时存在会话列表请求、历史请求、模型请求、聊天流和知识库轮询，每一种任务都需要考虑结果晚到或组件卸载后的行为。\n\n已有防护的边界也应分清：alive 标记只是忽略结果，并不会取消普通 HTTP 请求；AbortController 真正取消的是聊天流；知识库关闭只清理后续轮询定时器，已经发出的 refresh 仍可能完成。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "网络异常或流失败 → 提示与占位收尾；Chat 卸载 → abort",
+            "steps": [
+              {
+                "layer": "网络错误翻译",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/api.ts:31",
+                "functionName": "fetchResponse()",
+                "explanation": "所有请求通过 fetchResponse 调用浏览器 fetch，网络不可达产生的 TypeError 会被转换成中文提示，便于页面直接展示。若 signal 已经 aborted，则保留原异常，让 Chat.send 根据取消信号决定是否需要显示错误，而不是把用户离开当作服务不可用。",
+                "code": "async function fetchResponse(url: string, options: RequestInit): Promise<Response> {\n  try {\n    return await fetch(url, options)\n  } catch (cause) {\n    // 浏览器的网络异常未经过后端，统一转换成中文；主动取消请求保留原异常。\n    if (!options.signal?.aborted && cause instanceof TypeError) {\n      throw new Error('无法连接服务，请确认前后端已启动并检查网络。')\n    }\n    throw cause\n  }",
+                "language": "typescript",
+                "keyPoint": "网络失败需要提示，主动取消需要保留可识别的语义。"
+              },
+              {
+                "layer": "流失败收尾",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/App.tsx:167",
+                "functionName": "Chat.send()",
+                "explanation": "catch 仅在请求未取消时展示错误；如果最终答案还没到，会把末尾助手草稿替换成明确的未完成提示并清除来源。answerFinalized 为真时保留已经核对完成的答案，即使后续刷新列表失败也不会覆盖它；finally 释放 activeRequest 并恢复 busy 与进度状态。",
+                "code": "    } catch (cause) {\n      if (!controller.signal.aborted) {\n        setError(cause instanceof Error ? cause.message : '发送失败')\n        if (!answerFinalized) {\n          setMessages((items) => items.at(-1)?.role === 'assistant'\n            ? items.map((item, index) => index === items.length - 1\n              ? { ...item, content: '本次回答未完成，生成或核对失败，请重试。', sources: [], sourcesPending: false }\n              : item)\n            : items)\n        }\n      }\n    } finally {\n      activeRequest.current = null\n      setBusy(false)\n      setStreamStatus('')",
+                "language": "typescript",
+                "keyPoint": "失败结果不能伪装成完整答案，已完成答案也不应被后续小步骤覆盖。"
+              },
+              {
+                "layer": "页面生命周期",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/App.tsx:99",
+                "functionName": "Chat() 中首次挂载的 useEffect",
+                "explanation": "Chat 挂载时读取会话列表，并用 alive 确保页面卸载后不再写入请求结果。清理函数除了改变 alive，还取消 activeRequest 指向的聊天流；模型列表与历史也有各自的 alive 检查，构成局部组件负责局部任务的收尾方式。",
+                "code": "  useEffect(() => {\n    let alive = true\n    api<Conversation[]>('/conversations').then((items) => {\n      if (alive) setConversations(items)\n    }).catch((cause) => {\n      if (alive) setError(cause instanceof Error ? cause.message : '加载会话失败')\n    }).finally(() => { if (alive) setLoading(false) })\n    return () => { alive = false; activeRequest.current?.abort() }\n  }, [])",
+                "language": "typescript",
+                "keyPoint": "请求所属组件退出时，清理监听、轮询与可取消任务。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "本模块学习的核心是把异步结果稳定地变成界面状态：认证凭据由请求层注入，会话历史由服务端恢复，token 草稿与最终答案采用不同更新规则，书籍导入用任务状态反馈，模型表单与选择各有生命周期。继续阅读后端时，可沿 /auth、/conversations、/chat、/knowledge、/models 这些边界追踪鉴权、持久化、工作流与向量检索；前端自身不承担数据库或 Milvus 索引职责。\n\n当前代码中，JSON api 和聊天流会在 401 时清除 token，但没有统一的全局鉴权订阅来立即强制跳转；上传函数也没有同样的 401 清理分支。学习时应把这些视为实际边界，避免把页面跳转逻辑描述成完整的全局失效处理。"
+        }
+      ]
+    }
+  ]
+}

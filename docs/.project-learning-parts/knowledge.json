@@ -1,0 +1,521 @@
+{
+  "moduleName": "书籍知识库与检索",
+  "moduleDescription": "书籍从上传到向量化后，同时建立稠密向量与 BM25 稀疏索引。查询经过两路召回、RRF 融合及独立重排，再由图组织可引用的原文；关系表继续决定用户归属与 ready 状态。",
+  "sections": [
+    {
+      "title": "背景知识：召回、融合和重排分别解决什么",
+      "anchor": "practice-knowledge-concept",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "背景知识：向量检索擅长找意思接近的文本，BM25 通过分词及词项统计寻找关键词匹配；两者都有盲点。项目先各取候选，Milvus 原生 RRFRanker 按排名而不是直接相加原始分数融合，公式是对每一路命中的 1/(k+rank) 求和，k 默认 60、rank 从 1 开始。随后专门的重排模型同时读取问题与原文，再计算相关性。\n\nRRF 合并的是不同召回信号，rerank 重新判断问题与候选之间的关系，二者不是重复步骤。最后的回答依据核对仍保留：相关片段不等于能够支持所有结论。"
+        },
+        {
+          "type": "table",
+          "table": {
+            "headers": [
+              "字段",
+              "含义",
+              "用途与限制"
+            ],
+            "rows": [
+              [
+                "dense_score",
+                "查询向量与片段向量的余弦相似度",
+                "dense 基线过滤；判断是否强命中短书"
+              ],
+              [
+                "fusion_score",
+                "Milvus 原生 RRF 分数",
+                "候选排名，不使用原余弦 0.55 阈值"
+              ],
+              [
+                "rerank_score",
+                "硅基流动重排相关性分数",
+                "默认模式排序并以 0.30 初始阈值筛选，需重新校准"
+              ],
+              [
+                "score / score_type",
+                "当前排序分数及其类型",
+                "dense、rrf、rerank、expansion 不同量纲，不当作正确概率"
+              ],
+              [
+                "is_expansion",
+                "是否来自短书上下文扩展",
+                "低分上下文不冒充独立合格命中，仍受图的证据预算限制"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "检索结果数据结构",
+            "steps": [
+              {
+                "layer": "数据结构",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/types.py:28",
+                "functionName": "RetrievedChunk",
+                "explanation": "search 返回带来源的 RetrievedChunk，工具再转成字典交给图。新增字段分别保留不同阶段分数，避免把 RRF 小数误用余弦阈值过滤；is_expansion 告诉后续这是同书上下文。",
+                "code": "    score: float\n    score_type: str = \"dense\"\n    dense_score: float | None = None\n    fusion_score: float | None = None\n    rerank_score: float | None = None\n    is_expansion: bool = False",
+                "language": "python",
+                "keyPoint": "先问分数是哪一阶段产生的，再讨论阈值。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "集合结构：原文如何自动形成 BM25 索引",
+      "anchor": "practice-knowledge-storage",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "PostgreSQL 的 KnowledgeBook 仍保存书籍归属、文件路径、哈希与 processing/ready/failed 状态，没有新增关系表。新的 Milvus 混合集合保留原来的 id/vector/user_id/book_id/title/page/text，text 启用 jieba＋lowercase 分词，再添加 sparse 字段与 BM25 Function。原有向量集合不就地改造，通过迁移脚本建立新集合并发布别名。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "书籍导入 → 创建混合索引",
+            "steps": [
+              {
+                "layer": "Milvus",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/milvus_store.py:61",
+                "functionName": "MilvusBookStore._ensure_collection()",
+                "explanation": "调用者仍只写原文与稠密向量，Milvus 的 BM25 Function 自动从 text 生成 sparse。两个向量字段分别建立 COSINE 和 BM25 索引，不需要在 Python 维护一份额外的关键词索引。",
+                "code": "        schema.add_field(\"text\", DataType.VARCHAR, max_length=4096, enable_analyzer=True,\n                         analyzer_params={\"tokenizer\": \"jieba\", \"filter\": [\"lowercase\"]})\n        schema.add_field(\"sparse\", DataType.SPARSE_FLOAT_VECTOR)\n        schema.add_function(Function(name=\"book_bm25\", input_field_names=[\"text\"],\n                                     output_field_names=[\"sparse\"], function_type=FunctionType.BM25))\n        indexes = client.prepare_index_params()\n        indexes.add_index(field_name=\"vector\", index_type=\"AUTOINDEX\", metric_type=\"COSINE\")\n        indexes.add_index(field_name=\"sparse\", index_type=\"SPARSE_INVERTED_INDEX\", metric_type=\"BM25\")\n        client.create_collection(name, schema=schema, index_params=indexes)\n        client.load_collection(name)\n",
+                "language": "python",
+                "keyPoint": "BM25 稀疏字段由数据库函数生成，应用不上传手算 BM25 向量。"
+              },
+              {
+                "layer": "验证",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/milvus_store.py:74",
+                "functionName": "_validate_hybrid_schema()",
+                "explanation": "查询或写入已有混合集合时先检查稠密维度、sparse 字段及 BM25 函数。若连接到了旧集合或错误向量空间就拒绝继续，而不是返回看似正常的错误结果。",
+                "code": "        description = client.describe_collection(name)\n        fields = {field[\"name\"]: field for field in description[\"fields\"]}\n        dimension = int(fields.get(\"vector\", {}).get(\"params\", {}).get(\"dim\", 0))\n        if dimension != settings.EMBEDDING_DIMENSION or \"sparse\" not in fields:\n            raise ValueError(\"混合索引字段或向量维度不匹配，请迁移到新的集合名称。\")\n        if not any(\"sparse\" in fn.get(\"output_field_names\", []) for fn in description.get(\"functions\", [])):\n            raise ValueError(\"集合缺少 BM25 函数，请执行混合索引迁移。\")\n",
+                "language": "python",
+                "keyPoint": "字段存在与向量维度匹配都是索引可用的前提。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "上传与查看状态：202 为什么不是导入成功",
+      "anchor": "practice-knowledge-upload",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "文件上传与向量化是两个阶段。HTTP 202 只表示服务器已经保存文件、创建任务记录并安排后台处理，不能理解成 Milvus 已经有完整索引。前端通过书籍列表重复查询状态，直到显示 ready 或 failed；这使网络请求不必一直等待解析和外部 Embedding 调用。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "POST /api/v1/knowledge/books — 接收书籍并安排后台导入",
+            "steps": [
+              {
+                "layer": "前端",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/App.tsx:242",
+                "functionName": "KnowledgePanel.upload()",
+                "explanation": "用户提交表单时，upload 把当前 file 和 title 交给 api.ts 的 uploadBook；成功后清空选择并调用 refresh 更新列表。这里 busy 只管理这次上传请求，不能代表后台任务完成，因此页面还需要每三秒查询书籍列表。",
+                "code": "/** 将选定文件和标题交给 uploadBook，清空界面选择并刷新；上传成功不等于索引完成。 */\nasync function upload(event: FormEvent<HTMLFormElement>) {\n  event.preventDefault()\n  if (!file) return\n  setBusy(true); setError('')\n  try { await uploadBook(file, title); setFile(null); setTitle(''); await refresh() }\n  catch (cause) { setError(cause instanceof Error ? cause.message : '上传失败') }\n  finally { setBusy(false) }",
+                "language": "typescript",
+                "keyPoint": "前端收到上传响应后展示processing，后续通过列表观察最终状态。"
+              },
+              {
+                "layer": "接口",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/knowledge.py:30",
+                "functionName": "upload_book()",
+                "explanation": "FastAPI 从 multipart 表单得到 file/title，并通过认证依赖提供 user.id；接口把这些参数交给 KnowledgeService.upload。upload 成功返回数据库记录后，接口把 book.id 和 user_id 交给 BackgroundTasks，响应状态码在路由声明中设为202；不是同步等待 process 完成。",
+                "code": "\"\"\"校验并保存文件，安排后台解析任务；202 只表示已接收。\"\"\"\nassert user.id is not None\nuser_id = user.id\nservice = KnowledgeService()\ntry:\n    book = await service.upload(session, user_id, file, title)\nexcept ValueError as exc:\n    raise HTTPException(status_code=400, detail=str(exc)) from exc\nbackground.add_task(service.process, book.id, user_id)\nreturn book",
+                "language": "python",
+                "keyPoint": "后台任务只传资源编号和用户编号，不沿用上传接口的数据库会话。"
+              },
+              {
+                "layer": "业务层",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:45",
+                "functionName": "KnowledgeService.upload()：校验与查重",
+                "explanation": "filename 被整理为不带目录的名字，读取量最多是25MB加1字节，以此拒绝空文件或超大文件；随后计算内容哈希并按用户查重。文件格式、书名长度错误或已有相同哈希会抛 ValueError，由接口转换为400，避免在明显无效输入上付出 Embedding 成本。",
+                "code": "filename = PureWindowsPath(file.filename or \"\").name\nsuffix = Path(filename).suffix.lower()\nif suffix not in SUPPORTED_SUFFIXES:\n    raise ValueError(\"仅支持 PDF、Markdown 和 TXT 文件\")\ncontents = await file.read(MAX_FILE_BYTES + 1)\nif not contents or len(contents) > MAX_FILE_BYTES:\n    raise ValueError(\"文件必须为非空且不超过 25 MB\")\ndigest = sha256(contents).hexdigest()\nif await self.books.get_by_hash(session, user_id, digest):\n    raise ValueError(\"这本书已经导入；失败记录可使用重试功能\")\nbook_title = (title or Path(filename).stem).strip()\nif not book_title or len(book_title) > 200:\n    raise ValueError(\"书名长度应为 1–200 个字符\")",
+                "language": "python",
+                "keyPoint": "哈希用于文件内容查重；同名不同内容并不一定重复。"
+              },
+              {
+                "layer": "仓储",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/knowledge_book_repository.py:25",
+                "functionName": "KnowledgeBookRepository.get_by_hash()",
+                "explanation": "upload 把当前认证用户编号和文件哈希传给仓储，仓储执行带两个 where 条件的 SQLModel 查询。只查当前用户使不同用户可以分别导入同一份资料，但这仍是先查询再插入的应用层检查，不具有数据库唯一约束的并发保障。",
+                "code": "async def get_by_hash(self, session: AsyncSession, user_id: int, sha256: str) -> KnowledgeBook | None:\n    \"\"\"按用户和文件哈希查重，同一文件允许不同用户各自导入。\"\"\"\n    return (await session.exec(select(KnowledgeBook).where(\n        KnowledgeBook.user_id == user_id, KnowledgeBook.sha256 == sha256))).first()",
+                "language": "python",
+                "keyPoint": "查询依据是用户和内容哈希，而不是文件名。"
+              },
+              {
+                "layer": "业务层",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:59",
+                "functionName": "KnowledgeService.upload()：原件保存与提交",
+                "explanation": "服务层生成书籍ID，再按存储根目录/用户编号/书籍ID加后缀保存文件，原始文件名仅用于展示。books.create 提交关系记录失败时会删除刚写入的原件，减少孤立文件；文件与数据库不是同一事务，这只是一个补偿步骤。",
+                "code": "book = KnowledgeBook(user_id=user_id, title=book_title, filename=filename,\n                     storage_path=\"\", sha256=digest)\nstorage = settings.BOOK_STORAGE_DIR / str(user_id) / f\"{book.id}{suffix}\"\nstorage.parent.mkdir(parents=True, exist_ok=True)\nawait asyncio.to_thread(storage.write_bytes, contents)\nbook.storage_path = str(storage)\ntry:\n    return await self.books.create(session, book)\nexcept Exception:\n    storage.unlink(missing_ok=True)\n    raise",
+                "language": "python",
+                "keyPoint": "先保存原件再提交记录，提交失败时补偿删除原件。"
+              },
+              {
+                "layer": "仓储",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/knowledge_book_repository.py:13",
+                "functionName": "KnowledgeBookRepository.create()",
+                "explanation": "create 接收服务层组装好的 KnowledgeBook，add 后提交并 refresh，使默认字段和持久化状态可被接口读取。返回的同一个书籍对象被接口序列化为 BookRead，其ID也用于安排后台任务。",
+                "code": "async def create(self, session: AsyncSession, book: KnowledgeBook) -> KnowledgeBook:\n    \"\"\"提交新书籍记录并刷新默认字段。\"\"\"\n    session.add(book)\n    await session.commit()\n    await session.refresh(book)\n    return book",
+                "language": "python",
+                "keyPoint": "数据库记录提交成功后，后台才能按ID重新读取它。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "GET /api/v1/knowledge/books — 列出自己的书籍与导入状态",
+            "steps": [
+              {
+                "layer": "接口",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/knowledge.py:18",
+                "functionName": "list_books()",
+                "explanation": "页面 refresh 调用该接口，认证依赖给出当前用户，接口直接把 user.id 传给 list_by_user。这里没有独立 Service 层，是因为这条路径没有索引业务，只做受限列表读取；不要为满足分层图而虚构一个不存在的函数。",
+                "code": "async def list_books(session: AsyncSession = Depends(get_session),\n                     user: User = Depends(get_current_user)):\n    \"\"\"仅列出登录用户的书籍和导入状态。\"\"\"\n    assert user.id is not None\n    return await KnowledgeBookRepository().list_by_user(session, user.id)",
+                "language": "python",
+                "keyPoint": "简单查询可以直接调用仓储，教学调用链必须符合真实代码。"
+              },
+              {
+                "layer": "仓储",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/knowledge_book_repository.py:30",
+                "functionName": "KnowledgeBookRepository.list_by_user()",
+                "explanation": "仓储只查询 user_id 匹配的记录，并用 col(created_at).desc() 按创建时间倒序。状态与错误字段随 BookRead 返回，前端 refresh 的 setBooks 替换列表，从而显示后台任务进度；没有书籍详情GET接口。",
+                "code": "async def list_by_user(self, session: AsyncSession, user_id: int) -> list[KnowledgeBook]:\n    \"\"\"返回当前用户的书籍，按创建时间倒序排列。\"\"\"\n    return list((await session.exec(select(KnowledgeBook).where(\n        KnowledgeBook.user_id == user_id).order_by(col(KnowledgeBook.created_at).desc()))).all())",
+                "language": "python",
+                "keyPoint": "processing、ready、failed 都通过同一个列表接口观察。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "后台索引：文件怎样变成 Milvus 中可检索的片段",
+      "anchor": "practice-knowledge-indexing",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "后台 process 是导入主线：先从已保存的原件解析文字，再切分、向量化，最后写入 Milvus 并标记 ready。每一步的数据类型都会变化，但 user_id、book_id 和位置始终跟随片段。同步的文件操作、PDF解析和 Milvus SDK 操作使用 asyncio.to_thread，避免这些步骤直接占住异步事件循环；这不等于使用了独立任务队列。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "upload_book/retry_book → BackgroundTasks → KnowledgeService.process()",
+            "steps": [
+              {
+                "layer": "业务层",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:73",
+                "functionName": "KnowledgeService.process()",
+                "explanation": "BackgroundTasks 使用 book_id 和 user_id 调用 process，process 自己创建 AsyncSession 并重新确认记录仍处于 processing。它按原件→PageText→BookChunk→向量→Milvus 的顺序推进，全部写入成功后才设置 ready 和 chunk_count，再由 update 提交状态。",
+                "code": "async with AsyncSession(engine) as session:\n    book = await self.books.get_owned(session, book_id, user_id)\n    if book is None or book.status != \"processing\":\n        return\n    try:\n        contents = await asyncio.to_thread(Path(book.storage_path).read_bytes)\n        pages = await asyncio.to_thread(parse_book, book.filename, contents)\n        chunks = await asyncio.to_thread(split_book, book.id, user_id, book.title, pages)\n        if not chunks:\n            raise ValueError(\"书籍没有可索引的文字\")\n        vectors = await EmbeddingService().embed([chunk.text for chunk in chunks])\n        await self.vectors.delete_book(user_id, book.id)\n        await self.vectors.insert(chunks, vectors)\n        book.status = \"ready\"\n        book.chunk_count = len(chunks)\n        book.error = None",
+                "language": "python",
+                "keyPoint": "ready 是整个索引链完成后的结果，不是文件上传成功的结果。"
+              },
+              {
+                "layer": "解析器",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/parser.py:25",
+                "functionName": "parse_book()",
+                "explanation": "process 把保存时记录的 filename 和 bytes 传入解析器；PDF 使用 pypdf 逐页提取，PageText.page 从1开始，Markdown/TXT按UTF-8-sig解码并先标page=0。解析器没有OCR和版面理解，扫描PDF无可提取文字会报错，复杂表格或代码排版也可能丢失结构；错误会使任务转为failed。",
+                "code": "if suffix == \".pdf\":\n    try:\n        reader = PdfReader(BytesIO(contents))\n        pages = [PageText(page=index + 1, text=page.extract_text() or \"\")\n                 for index, page in enumerate(reader.pages)]\n    except Exception as exc:\n        raise ValueError(\"PDF 无法解析或已加密\") from exc\nelse:\n    try:\n        pages = [PageText(page=0, text=contents.decode(\"utf-8-sig\"))]\n    except UnicodeDecodeError as exc:\n        raise ValueError(\"文本文件需要使用 UTF-8 编码\") from exc\nif not any(page.text.strip() for page in pages):\n    raise ValueError(\"没有提取到文字；扫描版 PDF 需要先进行 OCR\")",
+                "language": "python",
+                "keyPoint": "解析质量决定后续检索上限，Embedding 无法补回未被提取的原文。"
+              },
+              {
+                "layer": "切分器",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/parser.py:44",
+                "functionName": "split_book()",
+                "explanation": "process 将书籍ID、用户ID、书名与页面列表交给 split_book，后者调用官方 RecursiveCharacterTextSplitter，按段落、换行、中文标点等逐步切分。chunk_size=800、overlap=120 使用默认字符长度计算，不是精确token；逐页切分保留PDF页码，纯文本则用-index表示段号，超过4000段会拒绝导入。",
+                "code": "splitter = RecursiveCharacterTextSplitter(\n    chunk_size=800,\n    chunk_overlap=120,\n    separators=[\"\\n\\n\", \"\\n\", \"。\", \"！\", \"？\", \". \", \" \", \"\"],\n)\nchunks = []\nfor page in pages:\n    for index, text in enumerate(splitter.split_text(page.text), start=1):\n        if text.strip():\n            chunks.append(BookChunk(id=uuid4().hex, book_id=book_id,\n                                    user_id=user_id, title=title,\n                                    page=page.page if page.page else -index,\n                                    text=text.strip()))",
+                "language": "python",
+                "keyPoint": "切分算法来自LangChain，项目补充ID、归属、来源和数量限制。"
+              },
+              {
+                "layer": "外部接口",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/embeddings.py:23",
+                "functionName": "EmbeddingService.embed()",
+                "explanation": "process 提取所有 chunk.text 形成同序列表，每批最多16段发送给兼容OpenAI的 Embedding 接口。返回项按index排序并校验数量和维度后才合并，保证第i个向量仍对应第i段文字；正文没有在这里变成回答，输出只是list[list[float]]。",
+                "code": "result: list[list[float]] = []\nfor start in range(0, len(texts), 16):\n    batch = texts[start:start + 16]\n    response = await self.client.embeddings.create(model=settings.EMBEDDING_MODEL, input=batch)\n    vectors = [item.embedding for item in sorted(response.data, key=lambda item: item.index)]\n    if len(vectors) != len(batch) or any(len(vector) != settings.EMBEDDING_DIMENSION for vector in vectors):\n        raise ValueError(\"Embedding 维度或返回数量与配置不一致\")\n    result.extend(vectors)\nreturn result",
+                "language": "python",
+                "keyPoint": "批处理既减少请求数，也必须显式维持文字与向量的一一对应。"
+              },
+              {
+                "layer": "向量入口",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/milvus_store.py:117",
+                "functionName": "MilvusBookStore.insert()",
+                "explanation": "process 在插入前先按书籍删除旧向量，随后将chunks和vectors交给insert。insert检查两边数量一致，再用to_thread执行同步_insert，避免zip静默截断导致片段遗失；若数量不对，会进入process的失败处理。",
+                "code": "async def insert(self, chunks: list[BookChunk], vectors: list[list[float]]) -> None:\n    \"\"\"先检查切片与向量数量相等，再在线程中写入。\"\"\"\n    if len(chunks) != len(vectors):\n        raise ValueError(\"文本段和向量数量不一致\")\n    await asyncio.to_thread(self._insert, chunks, vectors)",
+                "language": "python",
+                "keyPoint": "写入前检查数量，不能只依赖zip配对。"
+              },
+              {
+                "layer": "向量存储",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/milvus_store.py:103",
+                "functionName": "MilvusBookStore._insert()",
+                "explanation": "_insert通过_client创建MilvusClient并调用_ensure_collection检查集合，每100条组装一次包含向量、全文和元数据的rows。client.insert完成后并不直接更新PostgreSQL，必须回到process；finally关闭客户端，异常则向业务层传播并由后者补偿清理。",
+                "code": "client = self._client()\ntry:\n    self._ensure_collection(client)\n    for start in range(0, len(chunks), 100):\n        rows = [\n            {\"id\": chunk.id, \"vector\": vector, \"user_id\": chunk.user_id,\n             \"book_id\": chunk.book_id, \"title\": chunk.title, \"page\": chunk.page,\n             \"text\": chunk.text}\n            for chunk, vector in zip(chunks[start:start + 100], vectors[start:start + 100])\n        ]\n        client.insert(self.collection, data=rows)\nfinally:\n    client.close()",
+                "language": "python",
+                "keyPoint": "Milvus负责片段存取；是否可用仍由业务层提交ready状态决定。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "默认检索调用链：问题到可引用证据",
+      "anchor": "practice-knowledge-retrieval",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "调用顺序是图 retrieve → search_book_chunks → KnowledgeService.search。Service 先从关系库确认当前用户的 ready 书籍，再对问题向量化，调用 Milvus 原生混合检索；融合结果及可选补取候选整体交给 reranker，最终片段回到 retrieve。浏览器选择的聊天模型不改变 Embedding 和 rerank 服务。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "chat_graph.retrieve → tool → KnowledgeService → Milvus → rerank → tool → retrieve",
+            "steps": [
+              {
+                "layer": "工具",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/agents/tools.py:21",
+                "functionName": "search_book_chunks()",
+                "explanation": "retrieve 从可信 runtime.context 传入 user_id，不由模型决定检索身份。工具打开自己的关系库会话调用 KnowledgeService.search，再把结果转换成含原文、来源和分阶段分数的字典返回。",
+                "code": "    async with AsyncSession(engine) as session:\n        # 本工具由 retrieve 节点调用，重试交给该节点，避免 Embedding SDK 再次叠加重试。\n        hits = await KnowledgeService(embedding_max_retries=0).search(session, user_id, question)\n    # 将检索结果对象转换成字典；保留完整原文供回答使用，同时提供简短原文摘录供展示。\n    return [\n        {\"book_id\": hit.chunk.book_id, \"title\": hit.chunk.title,\n         \"page\": hit.chunk.page, \"chunk_id\": hit.chunk.id,\n         \"score\": round(hit.score, 4), \"excerpt\": hit.chunk.text[:240],\n         \"score_type\": hit.score_type, \"dense_score\": hit.dense_score,\n         \"fusion_score\": hit.fusion_score, \"rerank_score\": hit.rerank_score,\n         \"is_expansion\": hit.is_expansion,\n         \"text\": hit.chunk.text}",
+                "language": "python",
+                "keyPoint": "工具返回证据及分数，不直接返回最终答案。"
+              },
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:132",
+                "functionName": "KnowledgeService.search()",
+                "explanation": "关系库先限定 ready book_ids；没有书籍立即返回，不发模型请求。hybrid_rerank 模式先融合及补取，再重排并筛选，关键词命中即使余弦较低也有机会进入重排。",
+                "code": "        book_ids = await self.books.list_ready_ids(session, user_id)\n        if not book_ids:\n            return []\n        embedding = (EmbeddingService() if self.embedding_max_retries is None\n                     else EmbeddingService(max_retries=self.embedding_max_retries))\n        query_vector = (await embedding.embed([question]))[0]\n        if self.retrieval_mode != \"dense\":\n            candidates = await self.vectors.hybrid_search(user_id, query_vector, question, book_ids)\n            candidates = await self._expand_candidates(session, user_id, question, query_vector, candidates)\n            if self.retrieval_mode == \"hybrid_rerank\":\n                ranked = await self.reranker.rerank(question, candidates)\n                qualified = [hit for hit in ranked if hit.score >= settings.RERANK_MIN_SCORE]\n            else:",
+                "language": "python",
+                "keyPoint": "不能在混合重排之前用旧余弦阈值丢掉关键词候选。"
+              },
+              {
+                "layer": "Milvus",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/milvus_store.py:173",
+                "functionName": "_hybrid_search()",
+                "explanation": "两个 AnnSearchRequest 分别查询 vector 和 sparse，并携带相同用户及书籍过滤表达式。hybrid_search 使用 RRFRanker(k) 合并排名，输出当前融合分数；结果还按 ID 去重并核对归属。",
+                "code": "            requests = [\n                AnnSearchRequest(data=[vector], anns_field=\"vector\", param={\"metric_type\": \"COSINE\"},\n                                 limit=settings.RAG_RECALL_K, expr=expression),\n                AnnSearchRequest(data=[question], anns_field=\"sparse\", param={\"metric_type\": \"BM25\"},\n                                 limit=settings.RAG_RECALL_K, expr=expression),\n            ]\n            hits = client.hybrid_search(self.collection, reqs=requests, ranker=RRFRanker(k=settings.RAG_RRF_K),\n                limit=settings.RAG_FUSION_K, output_fields=[\"user_id\", \"book_id\", \"title\", \"page\", \"text\", \"vector\"],\n                consistency_level=\"Strong\")[0]\n            result, seen = [], set()",
+                "language": "python",
+                "keyPoint": "权限过滤同时应用于两路，而不是检索全库后才过滤。"
+              },
+              {
+                "layer": "外部重排",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/reranker.py:40",
+                "functionName": "Reranker.rerank()",
+                "explanation": "重排接口收到 query 和候选原文，top_n 请求所有候选的分数。返回的 index 对应提交时 documents 的位置，应用必须按 index 找回原片段，不能假设结果与输入顺序一致。",
+                "code": "                response = await client.post(base.rstrip(\"/\") + \"/rerank\",\n                    headers={\"Authorization\": f\"Bearer {secret}\"},\n                    json={\"model\": settings.RERANK_MODEL, \"query\": question,\n                          \"documents\": [hit.chunk.text for hit in hits],\n                          \"top_n\": len(hits), \"return_documents\": False})\n                response.raise_for_status()\n                results = response.json()[\"results\"]\n            if not isinstance(results, list) or len(results) != len(hits):\n                raise ValueError(\"重排结果数量错误\")\n            ranked, seen = [], set()\n            for result in results:\n                index, score = result[\"index\"], result[\"relevance_score\"]\n                if (type(index) is not int or not 0 <= index < len(hits) or index in seen",
+                "language": "python",
+                "keyPoint": "重新评分后仍保留原片段 ID、来源和融合分数。"
+              },
+              {
+                "layer": "验证与排序",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/reranker.py:50",
+                "functionName": "Reranker.rerank()",
+                "explanation": "逐项验证 index 唯一且不越界，分数必须有限且位于接口约定范围。再使用 replace 保留不可变片段内容并写入 rerank_score，异常响应明确报错，不静默冒充完整链路。",
+                "code": "            for result in results:\n                index, score = result[\"index\"], result[\"relevance_score\"]\n                if (type(index) is not int or not 0 <= index < len(hits) or index in seen\n                        or type(score) not in (int, float) or not math.isfinite(score) or not 0 <= score <= 1):\n                    raise ValueError(\"重排结果编号或分数无效\")\n                seen.add(index)\n                ranked.append(replace(hits[index], score=float(score), score_type=\"rerank\", rerank_score=float(score)))\n            return sorted(ranked, key=lambda hit: (-hit.score, hit.chunk.id))\n        except httpx.HTTPStatusError as exc:\n            retryable = exc.response.status_code in (408, 409, 429, 500, 502, 503, 504)",
+                "language": "python",
+                "keyPoint": "重排失败与没有相关证据是不同情况。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "数量问题：补取后重排，同时保留有界的同书上下文",
+      "anchor": "practice-knowledge-expansion",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "“八种框架分别是什么”可能需要同一短文档中的多个页面，最终只取五个片段又会漏项。项目对明确数量问题，用独立 dense_score 判断是否强语义命中；书籍 ready 且总片段数不超过 24 时补取全文片段。合并、去重后整体重排，若最终合格结果包含这本书，就附带该书的扩展上下文；低分项标记 is_expansion，仍要接受回答依据核对和窗口预算。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "KnowledgeService.search → _expand_candidates → book_chunks → rerank → 最终选择",
+            "steps": [
+              {
+                "layer": "扩展条件",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:183",
+                "functionName": "_expand_candidates()",
+                "explanation": "普通问题直接使用候选，数量问题才寻找 dense_score 最强的命中并检查短书条件。RRF 分数不具备余弦量纲，不能与 MIN_EXPANSION_SCORE 直接比较。",
+                "code": "        if not hits or not asks_for_numbered_list(question):\n            return hits\n        top = max(hits, key=lambda hit: hit.dense_score if hit.dense_score is not None else -1)\n        if top.dense_score is None or top.dense_score < MIN_EXPANSION_SCORE:\n            return hits\n        book = await self.books.get_owned(session, top.chunk.book_id, user_id)\n        if book is None or book.status != \"ready\" or not 1 < book.chunk_count <= MAX_EXPANDED_CHUNKS:\n            return hits\n        expanded = await self.vectors.book_chunks(user_id, book.id, vector)\n        if len(expanded) != book.chunk_count or len({hit.chunk.id for hit in expanded}) != book.chunk_count:\n            return hits",
+                "language": "python",
+                "keyPoint": "强命中条件使用单独的余弦信号。"
+              },
+              {
+                "layer": "补取与去重",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:191",
+                "functionName": "_expand_candidates()",
+                "explanation": "读取短书片段后核对实际数量与关系表 chunk_count，并按 chunk.id 合并。与原候选重叠时保留融合分数，补取标记跟随候选进入重排，避免重复引用同一片段。",
+                "code": "        expanded = await self.vectors.book_chunks(user_id, book.id, vector)\n        if len(expanded) != book.chunk_count or len({hit.chunk.id for hit in expanded}) != book.chunk_count:\n            return hits\n        expanded_ids = {hit.chunk.id for hit in expanded}\n        merged = {hit.chunk.id: replace(hit, is_expansion=hit.chunk.id in expanded_ids) for hit in hits}\n        for hit in expanded:\n            merged.setdefault(hit.chunk.id, replace(hit, is_expansion=True))\n        return list(merged.values())\n",
+                "language": "python",
+                "keyPoint": "补取发生在重排之前，不在最终排序后偷偷拼接未评分候选。"
+              },
+              {
+                "layer": "最终证据",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:148",
+                "functionName": "search()",
+                "explanation": "先取通过阈值的前 K 项，再附带同一已命中书籍的扩展上下文。扩展上下文可能低于阈值但有明确标记，返回数量可能超过 K；评测不能将所有额外片段算进 Hit@K。",
+                "code": "            selected = qualified[:limit]\n            selected_ids = {hit.chunk.id for hit in selected}\n            selected_books = {hit.chunk.book_id for hit in selected}\n            neighbors = [hit for hit in ranked if hit.is_expansion\n                         and hit.chunk.book_id in selected_books and hit.chunk.id not in selected_ids]\n            # 低分扩展片段是同书上下文，不冒充已经通过相关性阈值的独立命中。\n            neighbors.sort(key=lambda hit: (hit.chunk.book_id, hit.chunk.page if hit.chunk.page > 0 else -hit.chunk.page))\n            return [*selected, *neighbors]\n\n        hits = await self.vectors.search(user_id, query_vector, limit, book_ids)",
+                "language": "python",
+                "keyPoint": "前 K 相关证据与同书邻接上下文需要分别解释。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "重试、删除和重启补偿：三处存储如何减少不一致",
+      "anchor": "practice-knowledge-recovery",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "一本书同时占用本地文件、PostgreSQL记录和Milvus向量。它们不能靠一次SQL事务同时成功或同时回滚，所以项目使用状态门槛与补偿操作减少不一致：失败不进入ready，重试先清理旧向量，删除按顺序进行。这样的实现适合本地作品集和单进程使用，但并不是具备持久队列与分布式锁的任务平台。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "POST /api/v1/knowledge/books/{book_id}/retry — 重设状态并重新导入",
+            "steps": [
+              {
+                "layer": "接口",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/knowledge.py:47",
+                "functionName": "retry_book()",
+                "explanation": "路由参数book_id与认证用户编号一起交给get_owned，找不到或不属于当前用户都返回404。只有确认归属后才调用retry，并把返回记录的ID安排给process；重复处理中任务会转为409，不会再安排一次。",
+                "code": "assert user.id is not None\nuser_id = user.id\nrepository = KnowledgeBookRepository()\nbook = await repository.get_owned(session, book_id, user_id)\nif book is None:\n    raise HTTPException(status_code=404, detail=\"书籍不存在\")\nservice = KnowledgeService()\ntry:\n    book = await service.retry(session, book)\nexcept ValueError as exc:\n    raise HTTPException(status_code=409, detail=str(exc)) from exc\nbackground.add_task(service.process, book.id, user_id)\nreturn book",
+                "language": "python",
+                "keyPoint": "先检查归属，再检查状态，最后安排后台执行。"
+              },
+              {
+                "layer": "业务层",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:105",
+                "functionName": "KnowledgeService.retry()",
+                "explanation": "retry接收已经通过归属检查的数据库对象，禁止processing记录重入，其他状态会重设为processing、清空错误和片段数。它只提交状态，不自己执行索引，随后由接口调用BackgroundTasks；这也意味着ready记录可通过API重新索引，前端目前只对failed展示重试按钮。",
+                "code": "async def retry(self, session: AsyncSession, book: KnowledgeBook) -> KnowledgeBook:\n    \"\"\"重置失败或已完成记录为 processing，后台任务随后重新导入。\"\"\"\n    if book.status == \"processing\":\n        raise ValueError(\"书籍正在处理\")\n    book.status = \"processing\"\n    book.error = None\n    book.chunk_count = 0\n    return await self.books.update(session, book)",
+                "language": "python",
+                "keyPoint": "可重试范围以服务层条件为准，不只看前端按钮。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "DELETE /api/v1/knowledge/books/{book_id} — 删除向量、记录和原件",
+            "steps": [
+              {
+                "layer": "接口",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/knowledge.py:66",
+                "functionName": "delete_book()",
+                "explanation": "delete_book先用当前用户和book_id查询get_owned，确认归属后才交给service.delete。无记录返回404，处理中不能删除则返回409，成功响应204且没有JSON正文；前端act完成后调用refresh。",
+                "code": "assert user.id is not None\nrepository = KnowledgeBookRepository()\nbook = await repository.get_owned(session, book_id, user.id)\nif book is None:\n    raise HTTPException(status_code=404, detail=\"书籍不存在\")\ntry:\n    await KnowledgeService().delete(session, book)\nexcept ValueError as exc:\n    raise HTTPException(status_code=409, detail=str(exc)) from exc",
+                "language": "python",
+                "keyPoint": "资源ID不能代替所有权检查。"
+              },
+              {
+                "layer": "业务层",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:114",
+                "functionName": "KnowledgeService.delete()",
+                "explanation": "服务层拒绝删除processing书籍，避免普通顺序执行时后台边读文件边被删；随后依次删除Milvus向量、提交删除关系记录、删除原件。这个顺序优先在向量服务失败时保留可重试记录，但后续数据库或文件步骤仍可能失败，现有代码没有跨存储回滚或自动补偿重试。",
+                "code": "async def delete(self, session: AsyncSession, book: KnowledgeBook) -> None:\n    \"\"\"禁止删除处理中书籍，依次删除向量、关系记录与文件。\"\"\"\n    if book.status == \"processing\":\n        raise ValueError(\"书籍正在处理，完成后再删除\")\n    await self.vectors.delete_book(book.user_id, book.id)\n    await self.books.delete(session, book)\n    Path(book.storage_path).unlink(missing_ok=True)",
+                "language": "python",
+                "keyPoint": "删除是顺序协调，不是跨数据库原子事务。"
+              },
+              {
+                "layer": "Milvus",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/milvus_store.py:221",
+                "functionName": "_delete_book()",
+                "explanation": "删除当前混合集合中的用户书籍片段，两路索引随实体一起更新。旧集合保留作迁移快照，不继续双写，业务可见性仍由关系表的 ready 书籍决定。",
+                "code": "            if client.has_collection(self.collection):\n                client.delete(self.collection, filter=self._filter(user_id, [book_id]))\n        finally:\n            client.close()\n",
+                "language": "python",
+                "keyPoint": "同一实体同时承载稠密与 BM25 索引，不维护两份正文。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "process异常与应用lifespan启动补偿",
+            "steps": [
+              {
+                "layer": "业务层",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:89",
+                "functionName": "KnowledgeService.process()：失败补偿",
+                "explanation": "解析、Embedding或插入抛普通异常时，process尝试删除该书全部向量，并将状态改为failed、保存最多500字符错误；即使清理再次失败，ready过滤仍阻止常规查询使用这些片段。CancelledError分支标记失败、提交后重新抛出，和普通失败清理路径不同，不能宣称所有取消都已删除向量。",
+                "code": "except Exception as exc:\n    logger.exception(\"书籍导入失败 book_id=%s user_id=%s\", book_id, user_id)\n    try:\n        await self.vectors.delete_book(user_id, book.id)\n    except Exception:\n        logger.exception(\"清理失败导入的向量失败 book_id=%s\", book_id)\n    book.status = \"failed\"\n    book.error = str(exc)[:500]\nexcept asyncio.CancelledError:\n    logger.warning(\"书籍导入被取消 book_id=%s user_id=%s\", book_id, user_id)\n    book.status = \"failed\"\n    book.error = \"导入任务被中断，请重试\"\n    await self.books.update(session, book)\n    raise\nawait self.books.update(session, book)",
+                "language": "python",
+                "keyPoint": "失败记录可见且不可检索，残留向量仍需重试或删除清理。"
+              },
+              {
+                "layer": "启动恢复",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:201",
+                "functionName": "mark_interrupted_imports()",
+                "explanation": "main.lifespan在启动时调用此函数，它创建独立会话，调用list_processing扫描遗留任务，并逐条用update改成failed。它不会自动恢复任务或清理全部残留向量，只让用户明确看到中断并选择重试；多worker部署时还需要更精细的任务所有权与租约。",
+                "code": "async def mark_interrupted_imports() -> None:\n    \"\"\"启动时将遗留的 processing 记录标记 failed，用户可明确重试。\"\"\"\n    repository = KnowledgeBookRepository()\n    async with AsyncSession(engine) as session:\n        for book in await repository.list_processing(session):\n            book.status = \"failed\"\n            book.error = \"服务重启中断了导入，请重试\"\n            await repository.update(session, book)",
+                "language": "python",
+                "keyPoint": "重启补偿把卡住的processing转为可处理状态，不是持久任务恢复。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "迁移、失败与模块总结",
+      "anchor": "practice-knowledge-summary",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "旧索引只包含稠密向量，因此新增字段不能靠修改 Python schema 自动迁移已有集合。停止所有写入后执行 python -m app.rag.migrate_index，它复制已有片段和向量，逐行计算摘要并校验目标及来源没有变化，烟测混合检索后才发布目标别名。失败不发布，旧集合和暂存集合都保留；发布后应用不双写旧集合，旧集合只是迁移时快照。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "python -m app.rag.migrate_index → migrate()",
+            "steps": [
+              {
+                "layer": "迁移校验",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/migrate_index.py:97",
+                "functionName": "migrate()",
+                "explanation": "向量和原文复制后，重新读取目标内容摘要，并与复制时的来源摘要逐 ID 比较，同时再次读取来源检测写入变化。校验后用保存的向量做混合检索烟测，不调用 Embedding 或 rerank 服务。",
+                "code": "        client.flush(stage)\n        client.load_collection(stage)\n        store._validate_hybrid_schema(client, stage)\n        if snapshot(client, stage) != before or snapshot(client, source) != before:\n            raise ValueError(\"迁移校验失败或来源在复制时发生变化；没有发布目标别名\")\n        if sample:\n            # 本地烟测使用已保存向量与原文，不发付费 Embedding 或 rerank 请求。\n            result = store._hybrid_search(sample[\"user_id\"], sample[\"vector\"], sample[\"text\"][:200], [sample[\"book_id\"]])\n            if not result:\n                raise ValueError(\"新集合混合检索未返回候选，停止发布\")\n        # 发布是最后一步。客户端从这时起才通过目标名称看到完整的新集合。",
+                "language": "python",
+                "keyPoint": "数量一致不等于内容一致，ID、元数据和 float32 向量都要校验。"
+              },
+              {
+                "layer": "发布",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/migrate_index.py:108",
+                "functionName": "migrate()",
+                "explanation": "创建目标别名是最后一步，应用在此之前不会通过该入口看到半成品集合。目标已存在时拒绝覆盖；本机端口检查不是分布式锁，其他写入进程必须由操作者暂停。",
+                "code": "        client.create_alias(collection_name=stage, alias=target)\n        manifest = hashlib.sha256(json.dumps(before, sort_keys=True).encode()).hexdigest()\n        return {\"source\": source, \"target\": target, \"physical_collection\": stage,\n                \"chunks\": len(before), \"verified\": True, \"snapshot_sha256\": manifest,\n                \"old_collection_preserved\": True}\n    except Exception:",
+                "language": "python",
+                "keyPoint": "不删除旧数据，不把端口检查说成完整的并发迁移方案。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "纯向量模式保留作基线；仅混合模式不套用余弦阈值，所以通常不会主动弃答；默认 hybrid_rerank 用独立重排阈值。重排服务错误明确失败，不是“无依据”，也不自动退回没有重排的结果。测试见 backend/tests/test_hybrid_retrieval.py；评测报告记录模式、分数类型、返回总数与前 K 指标。"
+        }
+      ]
+    }
+  ]
+}

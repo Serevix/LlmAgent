@@ -1,3 +1,5 @@
+"""解析 PDF、Markdown、TXT 并分块；保留位置，以便检索后引用。"""
+
 from io import BytesIO
 from pathlib import Path
 from uuid import uuid4
@@ -14,6 +16,7 @@ MAX_CHUNKS = 4000
 
 
 def parse_book(filename: str, contents: bytes) -> list[PageText]:
+    """校验文件后解析为 PageText；PDF 提取不到文字时提示先做 OCR。"""
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_SUFFIXES:
         raise ValueError("仅支持 PDF、Markdown 和 TXT 文件")
@@ -37,6 +40,7 @@ def parse_book(filename: str, contents: bytes) -> list[PageText]:
 
 
 def split_book(book_id: str, user_id: int, title: str, pages: list[PageText]) -> list[BookChunk]:
+    """逐页递归切分并保留重叠，创建可引用的 BookChunk，超量则拒绝导入。"""
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
         chunk_overlap=120,

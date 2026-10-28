@@ -1,3 +1,5 @@
+"""注册与登录接口：将用户请求交给业务服务，成功后返回 JWT。"""
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -12,6 +14,7 @@ router=APIRouter(prefix="/auth",tags=["auth"])
 
 @router.post("/register", response_model=TokenResponse, status_code=status.HTTP_201_CREATED)
 async def register(data: UserCreate, session: AsyncSession = Depends(get_session)):
+    """接收注册数据，创建用户并返回 token；重复账号转换为 HTTP 409。"""
     try:
         user = await UserService().create_user(session, data)
     except ValueError as exc:
@@ -21,6 +24,7 @@ async def register(data: UserCreate, session: AsyncSession = Depends(get_session
 
 @router.post("/login",response_model=TokenResponse)
 async def login(data:LoginRequest,session:AsyncSession=Depends(get_session)):
+    """验证用户名或邮箱和密码；成功返回 token，失败返回 HTTP 401。"""
     try:
         user=await AuthService().authenticate(session,data.username,data.password)
     except ValueError as exc:

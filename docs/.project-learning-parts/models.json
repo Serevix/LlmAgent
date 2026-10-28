@@ -1,0 +1,571 @@
+{
+  "moduleName": "模型配置与运行",
+  "moduleDescription": "本模块把模型服务配置与聊天状态分开，合并管理员预设与用户自己的接入参数，支持保存、测试、选择和删除。自定义 API Key 经 Fernet 加密后保存在 PostgreSQL，运行时按用户归属解析为 ModelSpec；请求级模型与预算复用原 checkpointer，使切换后仍延续原会话。",
+  "sections": [
+    {
+      "title": "背景知识：选择的是模型服务配置，不是上传模型权重",
+      "anchor": "practice-models-concept",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "背景知识：模型服务通常通过 HTTP 接收文字并返回生成结果。用户需要告诉服务端去哪个地址请求、请求哪一个模型，以及使用哪把 API Key 认证；兼容 OpenAI 接口是指这些服务遵循应用当前使用的请求与响应格式，并不意味着它们都属于同一个平台。用户在页面里添加配置或导入 JSON，只是登记这些调用参数，不会下载、上传或执行模型权重。"
+        },
+        {
+          "type": "text",
+          "text": "先分清四个名字：平台是实际提供接口的一方，model 是对方要求的模型标识，model_id 是本项目某条配置的编号，API Key 是平台认证凭据。同一个模型品牌可能由不同平台提供服务，因此模型名字相似不能说明地址或 Key 可以混用；前端只发 model_id，后端根据可信预设或用户自己的数据库记录决定实际调用参数。"
+        },
+        {
+          "type": "table",
+          "table": {
+            "headers": [
+              "概念",
+              "本项目中的位置",
+              "学习时要分清的职责"
+            ],
+            "rows": [
+              [
+                "平台与地址",
+                "ModelSpec.base_url；内置预设的环境配置",
+                "硅基流动、DeepSeek 官方和用户部署的服务分别使用各自地址。"
+              ],
+              [
+                "模型标识 model",
+                "ModelProfile.model / ModelSpec.model",
+                "最终发送给供应商；移除 openai: 前缀发生在 runtime_model 创建客户端时。"
+              ],
+              [
+                "配置编号 model_id",
+                "ChatRequest.model_id",
+                "default、builtin:deepseek、额外预设哈希编号或自定义记录 ID；不是供应商模型名。"
+              ],
+              [
+                "API Key",
+                "内置模型读取服务端配置；自定义模型读取 encrypted_api_key",
+                "接口列表不返回 Key；仅在运行时使用明文认证。"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "建议阅读顺序：先看 builtin_models → list_models → public_profile，知道下拉框选项从哪里来；再看 create 和 get_owned，理解用户配置如何隔离；最后看 resolve → runtime_model → runtime_graph → chat_stream，追踪一个选择怎样进入原会话的工作流。测试接口走临时客户端，不走会话和 RAG；完整聊天则仍要通过原来的检索与依据核对。"
+        }
+      ]
+    },
+    {
+      "title": "关系表：用户接入参数如何持久化，为什么不放进图状态",
+      "anchor": "practice-models-storage",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "数据库表 model_profiles 保存用户配置，使用户下次登录后还能重新选择。模型凭据属于接入配置，不应混在 messages、摘要或 checkpoint 的业务对话状态中，否则历史接口和调试输出可能间接泄露 Key；运行时只把解析后的 ModelSpec 保存在本次调用的变量中。内置预设读取服务端配置，不插入此表。"
+        },
+        {
+          "type": "table",
+          "table": {
+            "headers": [
+              "字段与声明类型",
+              "约束或默认值",
+              "设计原因"
+            ],
+            "rows": [
+              [
+                "id：str",
+                "UUID 十六进制字符串；主键",
+                "作为稳定配置编号，前端不必提交真实接入参数来选择已保存模型。"
+              ],
+              [
+                "user_id：int",
+                "users.id 外键；普通索引；不可空",
+                "标记归属，支撑按用户查询；实际隔离还依赖仓储中的 user_id 过滤。"
+              ],
+              [
+                "name：str；model：str；base_url：str",
+                "长度上限分别为 100、200、800",
+                "name 仅供显示；model 和 base_url 决定实际服务，两者不能混为一谈。"
+              ],
+              [
+                "encrypted_api_key：str",
+                "无明文 Key 字段；允许保存空字符串",
+                "Fernet 加密非空 Key；无需认证的本地服务可不提供 Key。"
+              ],
+              [
+                "context_window：int；max_output_tokens：int",
+                "默认 32768、2048",
+                "分别表示用户声明的窗口和输出预算，不是系统自动探测的模型规格。"
+              ],
+              [
+                "temperature：float或None；top_p：float或None",
+                "默认 None",
+                "未填写时不给模型客户端强行加入采样值，保留服务默认行为。"
+              ],
+              [
+                "timeout：int；structured_output_method：str",
+                "默认 60 秒；function_calling",
+                "给调用设置等待上限，并选择该服务支持的结构化协议。"
+              ],
+              [
+                "created_at：datetime",
+                "默认当前 UTC 时间",
+                "列表按创建时间排序；没有额外声明 name 唯一索引或用户加名称的唯一约束。"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "启动初始化 → SQLModel 元数据注册 → 创建缺失的关系表",
+            "steps": [
+              {
+                "layer": "Model",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/models/model_profile.py:12",
+                "functionName": "ModelProfile",
+                "explanation": "模型类声明了表名、主键和指向 users 的外键，SQLModel 根据这些声明注册关系表元数据。只有 user_id 显式声明普通索引，id 是主键；不能把应用层的用户检查误认为数据库已经自动施加了每用户的全部权限规则。读取时继续带 user_id，才能把记录归属落实到查询。",
+                "code": "    __tablename__ = \"model_profiles\"\n    id: str = Field(default_factory=lambda: uuid4().hex, primary_key=True)\n    user_id: int = Field(foreign_key=\"users.id\", index=True, nullable=False)\n    name: str = Field(max_length=100)\n    model: str = Field(max_length=200)\n    base_url: str = Field(max_length=800)\n    encrypted_api_key: str\n    context_window: int = 32768\n    max_output_tokens: int = 2048\n    temperature: float | None = None\n    top_p: float | None = None\n    timeout: int = 60\n    structured_output_method: str = \"function_calling\"\n    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))",
+                "language": "python",
+                "keyPoint": "模型表保存参数和密文，消息状态只保存对话业务数据。"
+              },
+              {
+                "layer": "Infrastructure",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/infrastructure/database/init_db.py:16",
+                "functionName": "init_db()",
+                "explanation": "应用启动时通过事务连接执行 metadata.create_all，前提是启动模块已经导入 ModelProfile，让表进入元数据。create_all 会创建缺失表，但不会替已有表自动补列或迁移字段；后面的 users.avatar 特例不能理解为项目已有通用迁移系统。记录是否真实存在仍取决于数据库连接和启动初始化是否成功。",
+                "code": "async def init_db() -> None:\n    \"\"\"在连接事务中创建已注册的关系表；不会创建 Milvus 集合。\"\"\"\n    async with engine.begin() as conn:\n        await conn.run_sync(SQLModel.metadata.create_all)\n        # create_all does not update columns in an existing table. Earlier\n        # databases made avatar NOT NULL although registration treats it as optional.\n        if conn.dialect.name == \"postgresql\":\n            await conn.execute(text(\"ALTER TABLE users ALTER COLUMN avatar DROP NOT NULL\"))",
+                "language": "python",
+                "keyPoint": "新增表通过启动初始化创建，结构升级仍需要明确迁移。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "ModelSpec 是 frozen=True 且 repr=False 的运行参数对象，用于减少意外修改和默认打印凭据的风险；它本身不是安全容器，也不会自动加密内存中的 Key。真正的持久化加密发生在 create，运行时解密发生在 resolve，两个位置需要一起阅读。"
+        }
+      ]
+    },
+    {
+      "title": "模型列表：合并平台预设与用户自己的配置",
+      "anchor": "practice-models-list",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "模型下拉框不是前端写死的一份供应商列表。页面先调用 GET /api/v1/models，后端合并管理员预设和当前用户配置，并只返回允许公开的字段；这样新增用户配置不需要改前端代码，服务端平台 Key 也不必发给浏览器。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "GET /api/v1/models → list_models → 仓储列表与内置列表 → 前端状态",
+            "steps": [
+              {
+                "layer": "Frontend",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ModelControls.tsx:55",
+                "functionName": "ModelControls() 的 useEffect 回调",
+                "explanation": "组件首次挂载时请求 /models，成功后 setModels 将公开选项放入组件状态，随后下拉框按 name 显示、按 id 选择。alive 标记避免组件卸载后晚到的网络响应继续更新状态。此时只是加载配置，不会调用远程大模型。",
+                "code": "  // 首次挂载获取内置及当前用户配置；卸载后不再把异步结果写入组件状态。\n  useEffect(() => {\n    let alive = true\n    api<ModelOption[]>('/models').then((items) => { if (alive) setModels(items) })\n      .catch((cause) => { if (alive) setError(cause instanceof Error ? cause.message : '加载模型列表失败') })\n    return () => { alive = false }\n  }, [])",
+                "language": "typescript",
+                "keyPoint": "页面只需要模型列表，不需要服务端 Key。"
+              },
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/models.py:27",
+                "functionName": "list_models() → ModelService.list_models()",
+                "explanation": "列表接口从认证依赖得到真实用户，再把数据库 session 和用户 ID 交给服务层。请求不能自行指定另一个 user_id 来列举配置，因此身份来源在接口边界就固定下来。下面相邻的 add_model 也采用同样依赖，说明列表和保存共用认证入口。",
+                "code": "@router.get(\"\", response_model=list[ModelProfileRead])\nasync def list_models(session: AsyncSession = Depends(get_session), user: User = Depends(get_current_user)):\n    \"\"\"只列出用户自己的模型配置和服务端允许的预设。\"\"\"\n    return await ModelService().list_models(session, user.id)\n\n\n@router.post(\"\", response_model=ModelProfileRead, status_code=201)\nasync def add_model(data: ModelProfileCreate, session: AsyncSession = Depends(get_session),\n                    user: User = Depends(get_current_user)):\n    \"\"\"保存手填或导入的参数，不在响应中回传密钥。\"\"\"\n    try:\n        return await ModelService().create(session, user.id, data)",
+                "language": "python",
+                "keyPoint": "user.id 来自登录身份，不由列表请求选择。"
+              },
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/model_service.py:78",
+                "functionName": "public_profile() / list_models()",
+                "explanation": "list_models 先读取 owned，然后把 builtin_models 的结果与每条 public_profile 合并。public_profile 显式挑选允许返回的字段，并用 has_api_key 告诉界面是否配置过 Key，而不是把密文当作无害字段返回。模型配置对象即使以后加了内部字段，也不会因为直接序列化整行而自动暴露它们。",
+                "code": "    def public_profile(profile: ModelProfile) -> ModelProfileRead:\n        \"\"\"显式挑选允许返回的字段，排除明文及密文密钥。\"\"\"\n        return ModelProfileRead(id=profile.id, name=profile.name, model=profile.model, kind=\"custom\",\n                                base_url=profile.base_url, context_window=profile.context_window,\n                                max_output_tokens=profile.max_output_tokens, temperature=profile.temperature,\n                                top_p=profile.top_p, timeout=profile.timeout,\n                                structured_output_method=profile.structured_output_method,\n                                has_api_key=bool(profile.encrypted_api_key))\n\n    async def list_models(self, session: AsyncSession, user_id: int) -> list[ModelProfileRead]:\n        \"\"\"返回服务端预设与当前用户自定义配置。\"\"\"\n        owned = await self.repository.list_owned(session, user_id)\n        return [*self.builtin_models(), *(self.public_profile(profile) for profile in owned)]",
+                "language": "python",
+                "keyPoint": "公开响应采用允许字段清单，既不返回明文，也不返回密文。"
+              },
+              {
+                "layer": "DAO",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/model_profile_repository.py:12",
+                "functionName": "list_owned() / get_owned()",
+                "explanation": "列表查询过滤 ModelProfile.user_id 并按 created_at 升序返回，服务层拿到的已经是当前用户记录。按配置编号查询同样把 id 与 user_id 放在同一条 where 中，其他用户的记录统一表现为不存在。后续解析和删除都复用这一查询，避免每条业务各写一套归属判断。",
+                "code": "    async def list_owned(self, session: AsyncSession, user_id: int) -> list[ModelProfile]:\n        \"\"\"按创建时间返回当前用户的配置列表。\"\"\"\n        result = await session.exec(select(ModelProfile).where(ModelProfile.user_id == user_id)\n                                    .order_by(col(ModelProfile.created_at).asc()))\n        return list(result.all())\n\n    async def get_owned(self, session: AsyncSession, profile_id: str, user_id: int) -> ModelProfile | None:\n        \"\"\"未找到或属于其他用户时统一返回 None。\"\"\"\n        return (await session.exec(select(ModelProfile).where(\n            ModelProfile.id == profile_id, ModelProfile.user_id == user_id))).first()",
+                "language": "python",
+                "keyPoint": "资源 ID 只说明找哪条记录，user_id 才限定它属于谁。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "builtin_models()：默认项 → 额外硅基流动项 → 官方 DeepSeek 项",
+            "steps": [
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/model_service.py:57",
+                "functionName": "builtin_models()：默认与额外预设",
+                "explanation": "默认模型以 default 为编号；CHAT_MODEL_OPTIONS 按逗号拆分、去空白、去重，并跳过与默认模型相同的名称。额外模型的编号由模型名的 SHA-256 前 16 个十六进制字符构造，因此同一名称重启后仍有相同编号。此配置专用于硅基流动额外预设，不能拿来解释用户自定义服务的来源。",
+                "code": "        result = [ModelProfileRead(id=\"default\", name=f\"硅基流动（默认） · {settings.CHAT_MODEL.removeprefix('openai:')}\",\n                                  model=settings.CHAT_MODEL, kind=\"builtin\",\n                                  context_window=settings.CHAT_CONTEXT_WINDOW_TOKENS,\n                                  max_output_tokens=settings.CHAT_MAX_OUTPUT_TOKENS)]\n        for model in dict.fromkeys(item.strip() for item in settings.CHAT_MODEL_OPTIONS.split(\",\") if item.strip()):\n            if model != settings.CHAT_MODEL:\n                identity = \"builtin:\" + hashlib.sha256(model.encode()).hexdigest()[:16]\n                result.append(ModelProfileRead(id=identity, name=f\"硅基流动 · {model.removeprefix('openai:')}\",\n                                              model=model, kind=\"builtin\",\n                                              context_window=settings.CHAT_CONTEXT_WINDOW_TOKENS,\n                                              max_output_tokens=settings.CHAT_MAX_OUTPUT_TOKENS))\n        if settings.DeepSeeK_API_KEY and settings.DeepSeeK_API_KEY.strip():\n            result.append(ModelProfileRead(\n                id=\"builtin:deepseek\", name=f\"DeepSeek 官方 · {settings.DEEPSEEK_CHAT_MODEL}\",",
+                "language": "python",
+                "keyPoint": "多个硅基流动选项是同平台不同模型，不是重复保存一把 Key。"
+              },
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/model_service.py:68",
+                "functionName": "builtin_models()：官方预设分支",
+                "explanation": "只有 DeepSeek 官方 Key 非空时，列表才加入 builtin:deepseek，并使用独立的 DEEPSEEK_CHAT_MODEL 作为官方模型标识。返回的仍只是名称、编号和预算，不含官方 Key。模型列表能显示只代表配置存在，不能证明供应商此刻可连接或支持完整聊天流程。",
+                "code": "        if settings.DeepSeeK_API_KEY and settings.DeepSeeK_API_KEY.strip():\n            result.append(ModelProfileRead(\n                id=\"builtin:deepseek\", name=f\"DeepSeek 官方 · {settings.DEEPSEEK_CHAT_MODEL}\",\n                model=settings.DEEPSEEK_CHAT_MODEL, kind=\"builtin\",\n                context_window=settings.CHAT_CONTEXT_WINDOW_TOKENS,\n                max_output_tokens=settings.CHAT_MAX_OUTPUT_TOKENS,\n            ))\n        return result",
+                "language": "python",
+                "keyPoint": "硅基流动上的 DeepSeek 与 DeepSeek 官方接口要分别配置。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "保存配置：先验证，再绑定用户与加密入库",
+      "anchor": "practice-models-create",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "填写和导入 JSON 最终都发送同一种 ModelProfileCreate 数据，因此后端只需要维护一套验证规则。浏览器限制只是操作体验，服务端仍必须重新检查字段、地址、预算和记录数量；否则绕过界面的请求就能写入不可用配置。此流程只登记配置，不试探供应商网络或发送生成请求。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "POST /api/v1/models：前端 save → Pydantic 验证 → add_model → create → repository.create",
+            "steps": [
+              {
+                "layer": "Frontend",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ModelControls.tsx:84",
+                "functionName": "save() → parameters()",
+                "explanation": "save 阻止表单默认提交和事件冒泡，通过 parameters 清理字符串并把可选空采样值转成 null。保存成功后将公开响应追加到模型列表、onSelect 选中新编号，并重置包含明文 Key 的表单。参数管理面板不会因为冒泡而误触发外层聊天发送，这是配置表单与聊天输入共处时的重要细节。",
+                "code": "  /** 阻止表单默认动作及事件冒泡，保存配置后加入列表、选中它并清空表单。 */\n  async function save(event: FormEvent<HTMLFormElement>) {\n    event.preventDefault(); event.stopPropagation()\n    setBusy(true); setError(''); setNotice('')\n    try {\n      const created = await api<ModelOption>('/models', { method: 'POST', body: JSON.stringify(parameters()) })\n      setModels((items) => [...items, created])\n      onSelect(created.id)\n      setForm(emptyForm()); setOpen(false)\n    } catch (cause) { setError(cause instanceof Error ? cause.message : '保存模型失败') }\n    finally { setBusy(false) }",
+                "language": "typescript",
+                "keyPoint": "保存配置与发送聊天是两个动作，成功保存后只更新选项。"
+              },
+              {
+                "layer": "Schema",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/schemas/model_profile.py:15",
+                "functionName": "ModelProfileCreate",
+                "explanation": "FastAPI 在进入 add_model 前先构造 ModelProfileCreate，未知字段会被拒绝，字符串会清理首尾空白。窗口、输出、超时和采样范围在这里检查，api_key 使用 SecretStr 降低对象默认表示意外显示明文的风险。SecretStr 不是数据库加密，后续仍要显式提取并加密。",
+                "code": "    model_config = ConfigDict(extra=\"forbid\", str_strip_whitespace=True)\n    name: str = Field(min_length=1, max_length=100, description=\"下拉框显示的名称。\")\n    model: str = Field(min_length=1, max_length=200, description=\"模型服务要求的模型标识。\")\n    base_url: str = Field(min_length=1, max_length=800, description=\"兼容 OpenAI 的 API 根地址。\")\n    api_key: SecretStr = Field(default=SecretStr(\"\"), max_length=4096, description=\"无需鉴权的本地服务可留空。\")\n    context_window: int = Field(default=32768, ge=4096, le=2000000)\n    max_output_tokens: int = Field(default=2048, ge=128, le=32768)\n    temperature: float | None = Field(default=None, ge=0, le=2)\n    top_p: float | None = Field(default=None, gt=0, le=1)\n    timeout: int = Field(default=60, ge=10, le=120)\n    structured_output_method: Literal[\"function_calling\", \"json_schema\", \"json_mode\"] = \"function_calling\"",
+                "language": "python",
+                "keyPoint": "数据格式验证发生在接口执行前，SecretStr 与持久化加密不是一回事。"
+              },
+              {
+                "layer": "Schema",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/schemas/model_profile.py:31",
+                "functionName": "validate_url()",
+                "explanation": "地址只允许 HTTP 或 HTTPS，拒绝内嵌账号密码、查询参数和片段，并校验端口。代码还拒绝直接写出的链路本地、多播和未指定 IP，但允许本地推理服务地址，所以并未全面禁止私网目标。它没有对域名做完整 DNS 解析和重绑定防护，部署为公网服务时还需要网络出口策略，不能称为完整 SSRF 防护。",
+                "code": "        try:\n            parsed = urlsplit(value)\n            if (parsed.scheme not in (\"http\", \"https\") or not parsed.hostname\n                    or parsed.username or parsed.password or parsed.query or parsed.fragment):\n                raise ValueError()\n            _ = parsed.port\n            try:\n                address = ipaddress.ip_address(parsed.hostname)\n            except ValueError:\n                address = None\n            if address and (address.is_link_local or address.is_multicast or address.is_unspecified):\n                raise ValueError()\n        except ValueError:\n            raise ValueError(\"接口地址须为 HTTP/HTTPS 根地址，不能包含账号、密钥、查询参数或片段。\") from None\n        return value.rstrip(\"/\")",
+                "language": "python",
+                "keyPoint": "允许本地模型意味着要清楚地址校验的实际边界。"
+              },
+              {
+                "layer": "Schema",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/schemas/model_profile.py:47",
+                "functionName": "validate_budget() → ContextLimits.from_settings()",
+                "explanation": "字段范围合法还不够，例如很小的窗口配很大的最大输出，会使剩余空间连最低历史和证据预算都装不下。整体验证器调用 ContextLimits.from_settings，提前检查组合是否可用，避免配置虽然保存成功却每次生成都失败。窗口仍来自用户声明，校验不会向供应商查询真实规格。",
+                "code": "    @model_validator(mode=\"after\")\n    def validate_budget(self):\n        \"\"\"模型自带窗口限制也约束摘要、检索证据和辅助调用。\"\"\"\n        ContextLimits.from_settings(self.context_window, self.max_output_tokens)\n        return self",
+                "language": "python",
+                "keyPoint": "单字段合法不代表参数组合能运行。"
+              },
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/models.py:33",
+                "functionName": "add_model()",
+                "explanation": "已经通过格式验证的数据进入接口，接口只把 data、当前 user.id 和 session 交给服务层。服务层抛出的数量限制等 ValueError 被转换成 400，便于前端显示可操作原因。格式错误由 FastAPI 返回 422，与业务限制分开处理。",
+                "code": "@router.post(\"\", response_model=ModelProfileRead, status_code=201)\nasync def add_model(data: ModelProfileCreate, session: AsyncSession = Depends(get_session),\n                    user: User = Depends(get_current_user)):\n    \"\"\"保存手填或导入的参数，不在响应中回传密钥。\"\"\"\n    try:\n        return await ModelService().create(session, user.id, data)\n    except ValueError as exc:\n        raise HTTPException(status_code=400, detail=str(exc)) from exc",
+                "language": "python",
+                "keyPoint": "接口负责 HTTP 错误映射，服务负责配置保存规则。"
+              },
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/model_service.py:99",
+                "functionName": "ModelService.create() → credential_cipher()",
+                "explanation": "create 先检查当前用户是否已保存 20 条，然后排除 api_key 形成普通字段集合，提取非空 Key 后用 Fernet 加密。user_id 由接口传入，用户提交的对象不能覆盖它；公开返回值再经 public_profile 去掉密文。20 条限制是先查再写的应用层规则，并发请求下没有数据库级原子计数约束。",
+                "code": "        owned = await self.repository.list_owned(session, user_id)\n        if len(owned) >= 20:\n            raise ValueError(\"最多保存 20 个自定义模型，请先删除不再使用的配置。\")\n        values = data.model_dump(exclude={\"api_key\"})\n        secret = data.api_key.get_secret_value().strip()\n        encrypted = credential_cipher().encrypt(secret.encode()).decode() if secret else \"\"\n        profile = ModelProfile(user_id=user_id, encrypted_api_key=encrypted, **values)\n        return self.public_profile(await self.repository.create(session, profile))",
+                "language": "python",
+                "keyPoint": "先加密再交给仓储，明文不进入模型配置表。"
+              },
+              {
+                "layer": "DAO",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/model_profile_repository.py:23",
+                "functionName": "ModelProfileRepository.create()",
+                "explanation": "仓储接收的是带用户归属和密文的 ModelProfile，add 仅把对象加入当前 session，commit 才提交事务。refresh 重新读取提交后的字段，再把记录交回 public_profile 构造响应。接口不直接散落 commit，可让持久化边界集中在仓储，但这里也没有跨外部模型服务的分布式事务。",
+                "code": "    async def create(self, session: AsyncSession, profile: ModelProfile) -> ModelProfile:\n        \"\"\"提交加密后的配置并刷新数据库字段。\"\"\"\n        session.add(profile)\n        await session.commit()\n        await session.refresh(profile)\n        return profile",
+                "language": "python",
+                "keyPoint": "明确区分 add、commit 和 refresh 的作用。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "JSON 导入路径是 importFile → parseModelConfig → numeric → setForm，只填表，不自动保存；文件上限为 64 KB。手填与导入之后都必须点击保存，且前端校验不能取代上面的服务端验证。"
+        }
+      ]
+    },
+    {
+      "title": "测试连接：为什么要同时测试结构化输出与流式文字",
+      "anchor": "practice-models-test",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "能返回一段聊天文字，并不表示模型服务能运行这个项目。工作流还依赖问题改写、依据核对等结构化结果，因此测试接口分别请求结构化输出和流式文字，检查两类基础能力。它不执行书籍检索、不写会话历史，也不保证复杂真实任务一定成功。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "POST /api/v1/models/test → test_model → runtime_model → 结构化 ainvoke 与文字 astream",
+            "steps": [
+              {
+                "layer": "Frontend",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ModelControls.tsx:97",
+                "functionName": "test() → parameters()",
+                "explanation": "测试按钮把当前表单参数交给 /models/test，不先保存到数据库，也不要求已经有配置 ID。成功提示说明这组参数通过了当前两项短检查，失败则保留表单供用户修正。测试会实际调用模型服务，可能消耗供应商额度。",
+                "code": "  /** 将当前参数交给 /models/test 检查流式与结构化输出；不保存配置或聊天记录。 */\n  async function test() {\n    setBusy(true); setError(''); setNotice('')\n    try {\n      const result = await api<{ message: string }>('/models/test', { method: 'POST', body: JSON.stringify(parameters()) })\n      setNotice(result.message)\n    } catch (cause) { setError(cause instanceof Error ? cause.message : '连接测试失败') }\n    finally { setBusy(false) }\n  }",
+                "language": "typescript",
+                "keyPoint": "测试参数可用性与保存参数是独立流程。"
+              },
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/models.py:55",
+                "functionName": "test_model() → runtime_model()",
+                "explanation": "测试接口同样要求登录，并先经过 ModelProfileCreate 的验证，再生成仅用于此次测试的 ModelSpec。async with 让临时客户端的生命周期覆盖整个测试，即使中途抛错也会清理连接。第一项调用要求供应商按所选协议返回 ConnectionDecision，固定 true 字段让检查结果容易判定。",
+                "code": "async def test_model(data: ModelProfileCreate, user: User = Depends(get_current_user)):\n    \"\"\"用户明确点击测试时，检查流式文字和结构化输出，两次调用不产生会话历史。\"\"\"\n    spec = ModelSpec(data.model, data.base_url, data.api_key.get_secret_value().strip(), data.context_window,\n                     data.max_output_tokens, data.temperature, data.top_p, data.timeout,\n                     data.structured_output_method)\n    try:\n        async with ModelService().runtime_model(spec) as model:\n            response = await model.with_structured_output(ConnectionDecision, method=spec.structured_output_method).ainvoke(\n                \"这是连接测试，请仅返回 connected=true。\" + output_instructions(ConnectionDecision, spec.structured_output_method),\n                max_tokens=128,\n            )",
+                "language": "python",
+                "keyPoint": "连通性测试还要检查项目真正依赖的输出协议。"
+              },
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/models.py:66",
+                "functionName": "test_model()：判断结果并消费 astream",
+                "explanation": "结构化对象类型和 connected 必须正确；随后完整消费一次短流，检查它不是空文字。第三方异常体可能回显请求头或参数，所以代码只记录异常类型并返回统一中文提示。测试没有调用 ConversationService 或图，因此不会生成用户可见历史消息。",
+                "code": "            if not isinstance(response, ConnectionDecision) or not response.connected:\n                raise ValueError(\"结构化输出无效\")\n            text = \"\"\n            async for chunk in model.astream([HumanMessage(content=\"请只回答：连接成功\")], max_tokens=32):\n                text += chunk.text\n            if not text.strip():\n                raise ValueError(\"流式输出为空\")\n        return {\"status\": \"ok\", \"message\": \"连接成功，流式和结构化输出均可使用。\"}\n    except Exception as exc:\n        # 第三方错误体可能含用户输入或凭据，不将原始异常写入日志或返回。\n        logger.warning(\"模型连接测试失败：%s\", type(exc).__name__)\n        raise HTTPException(status_code=400, detail=\"连接测试失败，请检查接口地址、API Key、模型名称及结构化输出方式。\") from None",
+                "language": "python",
+                "keyPoint": "结构化成功与流式成功要分别验证，异常不能照搬给用户。"
+              },
+              {
+                "layer": "LLM",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/llm/structured.py:8",
+                "functionName": "output_instructions()",
+                "explanation": "json_mode 只保证 JSON 格式时，还需把字段约束明确写入提示，因此此函数追加 Pydantic schema。function_calling 和 json_schema 由请求协议携带结构，函数返回空字符串，避免重复扩大输入。它只是提示辅助，供应商是否真正支持协议仍由测试和后续调用确认。",
+                "code": "def output_instructions(schema: type[BaseModel], method: str | None) -> str:\n    \"\"\"只为 JSON 模式追加完整格式说明，并让后续输入计数包含这些文字。\"\"\"\n    if method != \"json_mode\":\n        return \"\"\n    return \"\\n请严格输出 JSON 对象，不要 Markdown。字段及约束如下：\\n\" + json.dumps(\n        schema.model_json_schema(), ensure_ascii=False,\n    )",
+                "language": "python",
+                "keyPoint": "结构化输出不是所有兼容服务都天然支持的能力。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "解析选择：从前端 model_id 到后端 ModelSpec",
+      "anchor": "practice-models-resolve",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "选择下拉框只修改 selectedModel，不会切换会话或清空消息；真正执行模型调用是在下一次发送问题时。浏览器提交 model_id，由后端重新判断它属于默认、可信内置项还是当前用户记录，这使浏览器不必每次发送凭据，也不能靠猜到他人编号借用 Key。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "聊天请求携带 model_id → chat_stream → resolve_model → ModelService.resolve → ModelSpec",
+            "steps": [
+              {
+                "layer": "Frontend",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ModelControls.tsx:131",
+                "functionName": "ModelControls() 的 onChange → onSelect()",
+                "explanation": "下拉框 option 的 value 是配置 ID，onChange 把它交给父组件的 setSelectedModel。这里没有调用 setSelected 或 setMessages，所以选择模型并不重新加载历史。下一次 App.send 调用 streamChat 时才把 selectedModel 加入请求 JSON。",
+                "code": "  return <>\n    <div className=\"model-controls\">\n      <label>模型<select aria-label=\"选择回答模型\" disabled={disabled || busy} value={selected} onChange={(event) => onSelect(event.target.value)}>\n        {models.length ? models.map((model) => <option key={model.id} value={model.id}>{model.name}</option>) : <option value=\"default\">默认模型</option>}\n      </select></label>\n      <button type=\"button\" className=\"model-manage\" disabled={disabled || busy} onClick={() => { setOpen(true); setNotice('') }}>添加 / 管理模型</button>",
+                "language": "typescript",
+                "keyPoint": "模型选择状态与会话选择状态分开维护。"
+              },
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/chat.py:85",
+                "functionName": "chat_stream() → resolve_model()",
+                "explanation": "接口先查询会话是否属于当前用户，再解析模型，避免用户凭别人的会话编号运行工作流。thread_id 仍从原会话取出，ChatContext.user_id 仍来自当前登录身份。模型配置在 StreamingResponse 开始之前完成解析，无权限或配置不可解密能先返回正常 HTTP 错误。",
+                "code": "    try:\n        conversation = await service.get_owned(session, data.conversation_id,current_user.id)\n    except ValueError as exc:\n        raise HTTPException(status_code=404, detail=str(exc))\n\n    models = ModelService()\n    spec = await resolve_model(models, session, current_user.id, data.model_id)\n\n    config = {\"configurable\": {\"thread_id\": conversation.thread_id}}\n    context = ChatContext(user_id=current_user.id)",
+                "language": "python",
+                "keyPoint": "切换模型只改变调用参数，不改变可信用户身份和原 thread_id。"
+              },
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/chat.py:30",
+                "functionName": "resolve_model()",
+                "explanation": "这个薄封装等待 ModelService.resolve，并把查不到配置转换为 404，把无法解密等配置错误转换为 400。服务层无需导入 HTTPException，因而同一解析规则可被其他调用者复用。若把这些错误留到 SSE 内才发生，浏览器可能已拿到 200，只能再从事件体理解失败。",
+                "code": "async def resolve_model(models: ModelService, session: AsyncSession, user_id: int, model_id: str | None):\n    \"\"\"先检查模型配置的用户归属，让无权限或无效选择在流开始前返回 HTTP 错误。\"\"\"\n    try:\n        return await models.resolve(session, user_id, model_id)\n    except LookupError as exc:\n        raise HTTPException(status_code=404, detail=str(exc)) from exc\n    except ValueError as exc:\n        raise HTTPException(status_code=400, detail=str(exc)) from exc",
+                "language": "python",
+                "keyPoint": "流开始前处理可预知的模型选择错误。"
+              },
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/model_service.py:116",
+                "functionName": "resolve()：默认和内置预设分支",
+                "explanation": "None 或 default 返回 None，是告诉 runtime_graph 复用已有默认图，并不表示缺少模型。其他内置 ID 必须能在后端重新生成的列表中匹配；官方预设使用官方地址与 Key，额外硅基流动预设使用硅基流动地址与 Key。相同品牌模型在两个平台上的命名、认证和能力可能不同，不能只看名称前缀选择凭据。",
+                "code": "        if not model_id or model_id == \"default\":\n            return None\n        for builtin in self.builtin_models()[1:]:\n            if builtin.id == model_id:\n                # 官方预设必须使用官方的地址和 Key，不能落入硅基流动凭据分支。\n                if builtin.id == \"builtin:deepseek\":\n                    return ModelSpec(builtin.model, settings.DeepSeek_BASE_URL or \"https://api.deepseek.com/v1\",\n                                     settings.DeepSeeK_API_KEY or \"\", builtin.context_window,\n                                     builtin.max_output_tokens, structured_output_method=\"function_calling\")\n                return ModelSpec(builtin.model, settings.GuiJiLiuDong_BASE_URL or \"https://api.siliconflow.cn/v1\",\n                                 settings.GuiJiLiuDong_API_KEY or \"\", builtin.context_window,\n                                 builtin.max_output_tokens)",
+                "language": "python",
+                "keyPoint": "只有服务端认可的内置编号才读取平台凭据。"
+              },
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/model_service.py:128",
+                "functionName": "resolve()：自定义配置分支",
+                "explanation": "非内置 ID 交给 get_owned，查询同时过滤当前用户，不存在和他人配置统一抛 LookupError。记录存在时再解密 encrypted_api_key，解密失败提示重新添加，最后将该记录自己的地址、模型和预算组成 ModelSpec。用户添加的模型可以来自其他兼容平台或本地服务，不会被改用硅基流动 Key。",
+                "code": "        profile = await self.repository.get_owned(session, model_id, user_id)\n        if profile is None:\n            raise LookupError(\"模型配置不存在，请重新选择模型。\")\n        try:\n            secret = (credential_cipher().decrypt(profile.encrypted_api_key.encode()).decode()\n                      if profile.encrypted_api_key else \"\")\n        except InvalidToken:\n            raise ValueError(\"模型密钥无法解密，请删除该配置并重新添加。\") from None\n        return ModelSpec(profile.model, profile.base_url, secret, profile.context_window,\n                         profile.max_output_tokens, profile.temperature, profile.top_p,\n                         profile.timeout, profile.structured_output_method)",
+                "language": "python",
+                "keyPoint": "自定义模型使用自己的接入参数，归属检查早于解密。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "运行所选模型：独立客户端与预算，复用原会话存储",
+      "anchor": "practice-models-runtime",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "模型客户端持有地址与认证信息，因此本项目不把共享默认客户端的 Key 改成某个用户的 Key。每个非默认请求新建客户端和同结构的图，而 checkpointer 与 Store 仍复用应用启动资源；原 thread_id 负责找回对话，与本次选哪个模型没有绑定。上下文预算也作为独立对象传入，避免并发用户切换模型时互相覆盖全局配置。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "runtime_graph → runtime_model → ContextLimits.from_settings → build_chat_graph → graph.astream",
+            "steps": [
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/model_service.py:148",
+                "functionName": "runtime_model()",
+                "explanation": "嵌套上下文管理器创建独立异步和同步 HTTP 客户端，并禁止跟随重定向，减少 Key 被转发到重定向目标的风险。未设置的 temperature 与 top_p 不传，openai: 只在实际客户端模型名处去掉，无 Key 的本地服务使用占位字符串。yield 把客户端交给调用者；离开上下文时自动关闭连接，图的完整消费必须在这个作用域内。",
+                "code": "        # 不跟随重定向，避免请求中的 API Key 被转发到另一个地址。\n        async with httpx.AsyncClient(follow_redirects=False) as async_client:\n            with httpx.Client(follow_redirects=False) as sync_client:\n                parameters = {key: value for key, value in {\n                    \"temperature\": spec.temperature, \"top_p\": spec.top_p,\n                }.items() if value is not None}\n                model = ChatOpenAI(model=spec.model.removeprefix(\"openai:\"), base_url=spec.base_url,\n                                   api_key=spec.api_key or \"local-no-key\", timeout=spec.timeout,\n                                   max_retries=1, stream_usage=False, use_responses_api=False,\n                                   http_async_client=async_client, http_client=sync_client, **parameters)\n                yield model",
+                "language": "python",
+                "keyPoint": "凭据和连接按请求独立，整个流结束后再清理。"
+              },
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/model_service.py:169",
+                "functionName": "runtime_graph()",
+                "explanation": "默认分支直接提供 app.state.chat_graph；非默认分支先进入 runtime_model，再从模型窗口生成 ContextLimits，最后编译同一套节点结构。新图使用 app.state.checkpointer 和 app.state.store，所以能够按原 thread_id 恢复历史与摘要。这里切换的是整个工作流所使用的聊天模型，而不是复制会话或重建书籍向量。",
+                "code": "        if spec is None:\n            yield app.state.chat_graph\n            return\n        async with self.runtime_model(spec) as model:\n            limits = ContextLimits.from_settings(spec.context_window, spec.max_output_tokens)\n            yield build_chat_graph(model, app.state.checkpointer, app.state.store,\n                                   limits=limits, structured_output_method=spec.structured_output_method)",
+                "language": "python",
+                "keyPoint": "复用持久化状态，独立运行模型和预算。"
+              },
+              {
+                "layer": "Context",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/agents/context.py:45",
+                "functionName": "ContextLimits.from_settings()",
+                "explanation": "函数先从窗口扣除预留输出、安全余量和固定提示开销，再按比例缩小历史、摘要与证据预算。缩放系数最多为 1，因此用户声明更大窗口不会自动无上限扩大默认证据长度；低于最低可分配量则拒绝配置。窗口是配置值，字符大小采用保守估算，不能声称此逻辑自动识别供应商精确 token 容量。",
+                "code": "        if window is None and output is None:\n            return cls(**{name: getattr(settings, name) for name in cls.__dataclass_fields__})\n        window = window or settings.CHAT_CONTEXT_WINDOW_TOKENS\n        output = output or settings.CHAT_MAX_OUTPUT_TOKENS\n        margin = min(settings.CONTEXT_SAFETY_MARGIN_TOKENS, max(256, window // 16))\n        available = window - output - margin - 1024\n        total = (settings.CONTEXT_HISTORY_BUDGET_TOKENS + settings.CONTEXT_SUMMARY_MAX_TOKENS\n                 + settings.RAG_CONTEXT_BUDGET_TOKENS)\n        scale = min(1.0, available / total)\n        history = max(256, int(settings.CONTEXT_HISTORY_BUDGET_TOKENS * scale))\n        summary = max(128, int(settings.CONTEXT_SUMMARY_MAX_TOKENS * scale))\n        evidence = max(256, int(settings.RAG_CONTEXT_BUDGET_TOKENS * scale))\n        if history + summary + evidence > available:\n            raise ValueError(\"模型上下文窗口过小，请降低最大输出 token 数。\")",
+                "language": "python",
+                "keyPoint": "每个模型拥有独立预算，窗口和最大输出必须一起考虑。"
+              },
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/chat.py:98",
+                "functionName": "event_stream()：在 runtime_graph 上下文中消费 graph.astream()",
+                "explanation": "async with 包住整个 async for，避免提前退出 runtime_graph 导致 HTTP 客户端在流中途关闭。graph.astream 仍接收原 config 的 thread_id 和当前用户 context，因此选定模型能继续同一个对话。自定义 token/status 与最终节点 updates 再被外层转成 SSE，此处不直接改前端历史。",
+                "code": "    async def event_stream() -> AsyncIterator[str]:\n        \"\"\"将图的增量、候选来源和最终回答转换为 SSE；区分预算错误和运行异常。\"\"\"\n        try:\n            answer_received = False\n            async with models.runtime_graph(request.app, spec) as graph:\n                # custom 接收回答文字增量；updates 接收核对后的最终节点结果。\n                async for mode, payload in graph.astream(\n                    {\"messages\": [HumanMessage(content=data.message)]},\n                    config=config,\n                    context=context,\n                    stream_mode=[\"custom\", \"updates\"],\n                ):",
+                "language": "python",
+                "keyPoint": "资源生命周期必须覆盖真正消费流的过程。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "完整数据链可以这样复述：ModelControls.onChange → setSelectedModel → App.send → streamChat → chat_stream → resolve_model → resolve → runtime_graph → runtime_model 与 ContextLimits.from_settings → build_chat_graph → graph.astream → 原来的上下文、检索、生成与核对节点。Embedding 仍由书籍知识服务的独立向量化配置负责，切换回答模型不需要重导入书籍；接入某个接口也不意味着能绕过 RAG 证据约束。"
+        }
+      ]
+    },
+    {
+      "title": "删除、失败处理与复习：把权限、密钥和生命周期连起来",
+      "anchor": "practice-models-boundaries",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "模型管理不仅要能成功调用，还要考虑配置被删除、密文无法解开、供应商回显敏感参数、流中断和用户并发操作。删除配置只取消未来使用它的入口，不能删掉此前对话的文字或知识库；请求级客户端退出时释放资源，历史连续性由 checkpoint 负责。下面沿着删除和异常收尾检查整个设计的边界。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "DELETE /api/v1/models/{model_id} → delete_model → get_owned → delete → 前端回默认项",
+            "steps": [
+              {
+                "layer": "Frontend",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/frontend/src/ModelControls.tsx:120",
+                "functionName": "remove(model)",
+                "explanation": "前端先等待 DELETE 成功，再从列表移除配置，避免网络失败时界面先假装删除。若删掉当前选项则 onSelect 回到 default，但没有调用清空历史的方法。已经显示的回答仍保留，后续请求只是不再使用这个配置编号。",
+                "code": "  /** 删除指定自定义配置并移出列表；删除当前选项时回到默认模型，历史不受影响。 */\n  async function remove(model: ModelOption) {\n    setBusy(true); setError(''); setNotice('')\n    try {\n      await api(`/models/${model.id}`, { method: 'DELETE' })\n      setModels((items) => items.filter((item) => item.id !== model.id))\n      if (selected === model.id) onSelect('default')\n    } catch (cause) { setError(cause instanceof Error ? cause.message : '删除模型失败') }\n    finally { setBusy(false) }\n  }",
+                "language": "typescript",
+                "keyPoint": "删除接入配置与删除会话是两种业务。"
+              },
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/models.py:43",
+                "functionName": "delete_model() → repository.get_owned() / delete()",
+                "explanation": "接口按 ID 和登录用户查询记录，查不到统一返回 404，内置项也没有可供此接口删除的用户记录。确认归属后交给仓储删除并 commit，不碰 messages、conversation 或书籍表。这个限制必须在服务端实施，不能仅靠前端把删除按钮藏起来。",
+                "code": "@router.delete(\"/{model_id}\", status_code=204)\nasync def delete_model(model_id: str, session: AsyncSession = Depends(get_session),\n                       user: User = Depends(get_current_user)):\n    \"\"\"删除自己的配置，不修改消息、会话或书籍知识库。\"\"\"\n    repository = ModelService().repository\n    profile = await repository.get_owned(session, model_id, user.id)\n    if profile is None:\n        raise HTTPException(status_code=404, detail=\"模型配置不存在\")\n    await repository.delete(session, profile)",
+                "language": "python",
+                "keyPoint": "读取和删除都必须限定 user_id。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "解密与运行异常：可操作提示、有限日志、资源退出",
+            "steps": [
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/model_service.py:36",
+                "functionName": "credential_cipher()",
+                "explanation": "Fernet 密钥由 MODEL_CREDENTIAL_SECRET 派生，没有配置时退回 JWT_SECRET_KEY，并加入固定用途前缀。更换用于派生的秘密后，旧密文无法用新密钥直接解密，当前实现要求用户删除并重加配置，没有多版本密钥轮换机制。数据库密文与服务端秘密需要分别保护，获取两者仍能恢复原 Key。",
+                "code": "def credential_cipher() -> Fernet:\n    \"\"\"以服务端秘密派生 Fernet 密钥；更换秘密后旧密文需重新配置。\"\"\"\n    secret = settings.MODEL_CREDENTIAL_SECRET or settings.JWT_SECRET_KEY\n    key = hashlib.sha256((\"llm-model-credentials:\" + secret).encode()).digest()\n    return Fernet(base64.urlsafe_b64encode(key))",
+                "language": "python",
+                "keyPoint": "加密可减少单独泄露数据库的影响，但不能取代密钥管理。"
+              },
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/chat.py:62",
+                "functionName": "event_stream() 的异常分支",
+                "explanation": "上下文预算错误给出可修正的中文原因；用户所选模型的普通异常仅记录类型并返回统一提示，避免第三方错误体回显凭据。默认模型分支仍保留 logger.exception 的诊断方式，所以不能扩大为所有异常路径都已全面脱敏的结论。SSE 一旦开始，运行错误通过 error 事件告知前端，而不是再改变已发送的 HTTP 状态。",
+                "code": "    except ContextBudgetError as exc:\n        raise HTTPException(status_code=422, detail=str(exc)) from exc\n    except ArtifactProviderError as exc:\n        raise HTTPException(status_code=502, detail=str(exc)) from None\n    except ArtifactError as exc:\n        raise HTTPException(status_code=400, detail=str(exc)) from None\n    except Exception as exc:\n        if spec is None:\n            raise\n        logger.warning(\"所选模型聊天失败：%s\", type(exc).__name__)",
+                "language": "python",
+                "keyPoint": "区分流前 HTTP 错误与流中 error 事件，并控制第三方异常传播。"
+              },
+              {
+                "layer": "Verification",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/tests/test_models.py:223",
+                "functionName": "test_runtime_clients_close_and_window_limits_are_independent()",
+                "explanation": "测试用替身构造器捕获真实创建的 HTTP 客户端，在上下文中确认尚未关闭，在退出后确认全部关闭。它验证的是代码的资源管理行为，不向真实供应商付费接口请求。相邻断言还比较小窗口预算与默认预算，确保没有修改全局 settings。",
+                "code": "        spec = ModelSpec(\"openai:model-a\", \"http://localhost:11434/v1\", \"\", 4096, 512)\n        async with ModelService().runtime_model(spec):\n            assert not any(client.is_closed for client in clients)\n        assert all(client.is_closed for client in clients)\n        default = ContextLimits.from_settings()\n        small = ContextLimits.from_settings(4096, 512)\n        assert small.CHAT_CONTEXT_WINDOW_TOKENS == 4096\n        assert small.CONTEXT_HISTORY_BUDGET_TOKENS < default.CONTEXT_HISTORY_BUDGET_TOKENS\n        assert settings.CHAT_CONTEXT_WINDOW_TOKENS == default.CHAT_CONTEXT_WINDOW_TOKENS\n        assert small != default",
+                "language": "python",
+                "keyPoint": "测试证实客户端生命周期和预算隔离，不等于证实所有供应商都兼容。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "复习时回答五个问题：① model_id 与 model 为什么不同？② 用户自定义服务如何避免用错平台 Key？③ 为什么检查归属后才解密？④ 换模型后历史为何还在？⑤ async with 为什么必须包住整个流？对应答案依次回到 list/resolve、get_owned、runtime_graph 与 event_stream，就能用真实函数解释设计。"
+        },
+        {
+          "type": "text",
+          "text": "当前边界要如实说明：只接入兼容当前 OpenAI 客户端协议的模型服务；测试两次短输出不能保证真实 RAG、工具协议和长对话质量；窗口规格靠配置，不自动探测；地址允许本地服务且没有完整 DNS/网络级 SSRF 隔离；20 条限制未做并发原子约束；加密秘密轮换需重加配置。模块提供的是模型接入与运行隔离机制，不是模型托管平台。"
+        },
+        {
+          "type": "text",
+          "text": "生成工具模型边界：选择工具仍使用当前聊天模型，因此该模型必须支持原生工具调用，JSON 输出能力不能替代 tool_calls。真正的图片生成由 IMAGE_MODEL 与独立服务端图片凭据配置决定，切换聊天模型不会切换图片账号；Word 格式转换使用 python-docx，不额外请求一个写文件模型。"
+        }
+      ]
+    }
+  ]
+}

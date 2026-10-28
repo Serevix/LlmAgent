@@ -1,4 +1,5 @@
 # Tested development dependency snapshot: Python 3.13, Windows, 2026-09-28
+# Image/Word tool dependencies verified: 2026-10-22
 aiosqlite==0.22.1
 annotated-doc==0.0.5
 annotated-types==0.8.0
@@ -12,6 +13,7 @@ cffi==2.1.1
 charset-normalizer==3.5.1
 click==8.3.1
 colorama==0.4.6
+cryptography==50.0.1
 distro==1.9.0
 dnspython==2.8.0
 email-validator==2.3.0
@@ -39,12 +41,16 @@ langgraph-checkpoint-postgres==3.0.5
 langgraph-prebuilt==1.0.8
 langgraph-sdk==0.3.9
 langsmith==0.12.1
+lxml==6.1.0
+markdown-it-py==4.2.0
+mdurl==0.1.2
 numpy==2.4.4
 openai==2.26.0
 orjson==3.11.7
 ormsgpack==1.12.2
 packaging==26.3
 pandas==3.0.2
+pillow==12.2.0
 pluggy==1.6.0
 protobuf==6.33.6
 psycopg==3.3.3
@@ -61,6 +67,7 @@ pymilvus==2.6.12
 pypdf==6.10.2
 pytest==9.0.3
 python-dateutil==2.9.0.post0
+python-docx==1.2.0
 python-dotenv==1.2.1
 python-multipart==0.0.32
 pyyaml==6.0.3

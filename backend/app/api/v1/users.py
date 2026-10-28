@@ -1,3 +1,5 @@
+"""用户创建接口：复用注册业务，响应中不返回密码哈希。"""
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -21,6 +23,7 @@ async def create_user(
     data: UserCreate,
     session: AsyncSession = Depends(get_session),
 ):
+    """复用用户创建业务，成功返回公开用户信息，查重错误返回冲突。"""
     service = UserService()
 
     try:

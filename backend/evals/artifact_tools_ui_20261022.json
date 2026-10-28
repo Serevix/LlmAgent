@@ -1,0 +1,10 @@
+{
+  "imagePreview": true,
+  "authenticatedDownload": true,
+  "wordBytesVerified": true,
+  "sseArtifacts": true,
+  "historyRestore": true,
+  "mobileOverflow": false,
+  "fileReads": 5,
+  "browserErrors": []
+}

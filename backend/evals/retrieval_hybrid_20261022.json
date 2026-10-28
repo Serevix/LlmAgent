@@ -1,0 +1,1035 @@
+{
+  "evaluated_at": "2026-10-22T07:24:26.581248+00:00",
+  "embedding_model": "BAAI/bge-m3",
+  "strategy": "hybrid",
+  "dense_min_score": 0.55,
+  "rerank_min_score": 0.3,
+  "rerank_model": null,
+  "recall_k": 20,
+  "fusion_k": 40,
+  "rrf_k": 60,
+  "milvus_collection": "llm_book_chunks_bge_m3_hybrid",
+  "corpus": [
+    {
+      "sha256": "680a09e5a8813536c710cbce74f57e7708d9967259d067480f91aaac7ed0b7e7",
+      "chunks": 19
+    },
+    {
+      "sha256": "b8a96f017e43c1fb9b379d23b3a48539f64dacd9a9622a489422fa4f0fdb3bea",
+      "chunks": 149
+    },
+    {
+      "sha256": "483114a67bb2f4bf8df6aebab442a61f07b024c96117631fd4367c3a16ffbcb8",
+      "chunks": 4
+    },
+    {
+      "sha256": "55ee987f352f62b1788c783abedfa346245b65db518cf0ef818055469ace20e0",
+      "chunks": 20
+    },
+    {
+      "sha256": "44df274966abaf6ccca5f3a2c2c99ffa4cff639266fbf42d1cc03813f80d59d9",
+      "chunks": 36
+    }
+  ],
+  "count": 15,
+  "positive_count": 10,
+  "negative_count": 5,
+  "k": 5,
+  "hit_at_k": 0.9,
+  "mrr": 0.675,
+  "abstain_accuracy": 0,
+  "latency_ms_p50": 286.46,
+  "latency_ms_p95": 1014.85,
+  "cases": [
+    {
+      "question": "在构造 QA 数据时，为什么保留回答依据的文档片段？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "abstain_correct": null,
+      "latency_ms": 289.84,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "ff35c56d4ba84946b5191cd4ef85b297",
+          "page": 2,
+          "score": 0.032787,
+          "score_type": "rrf",
+          "dense_score": 0.6385916768712897,
+          "fusion_score": 0.032786883413791656,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "07fbfd3c92444d43b28b0ad6af976796",
+          "page": 1,
+          "score": 0.031281,
+          "score_type": "rrf",
+          "dense_score": 0.5707683548504677,
+          "fusion_score": 0.03128054738044739,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "d2d59374bb144b4a8140ac5816044110",
+          "page": 3,
+          "score": 0.031258,
+          "score_type": "rrf",
+          "dense_score": 0.6291631762444626,
+          "fusion_score": 0.03125763311982155,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "4f5119f8f89a436f9766a8251758c127",
+          "page": 4,
+          "score": 0.031054,
+          "score_type": "rrf",
+          "dense_score": 0.6343091403083962,
+          "fusion_score": 0.031054403632879257,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "176bc6a901234b8e880b901cbce3fb80",
+          "page": 3,
+          "score": 0.030118,
+          "score_type": "rrf",
+          "dense_score": 0.5331250709943135,
+          "fusion_score": 0.030117753893136978,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "为什么 QA 抽取过程需要保存中间结果并在请求失败时重试？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "abstain_correct": null,
+      "latency_ms": 279.85,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "4f5119f8f89a436f9766a8251758c127",
+          "page": 4,
+          "score": 0.032787,
+          "score_type": "rrf",
+          "dense_score": 0.6890696265529266,
+          "fusion_score": 0.032786883413791656,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "ff35c56d4ba84946b5191cd4ef85b297",
+          "page": 2,
+          "score": 0.031754,
+          "score_type": "rrf",
+          "dense_score": 0.5768409448381223,
+          "fusion_score": 0.0317540317773819,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "4fdbf0344a484732823bd47170f73009",
+          "page": 8,
+          "score": 0.030159,
+          "score_type": "rrf",
+          "dense_score": 0.6010438294861276,
+          "fusion_score": 0.03015873208642006,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "0cdb673b06d648a19f99506321a49e3b",
+          "page": 6,
+          "score": 0.029857,
+          "score_type": "rrf",
+          "dense_score": 0.5502356629780756,
+          "fusion_score": 0.029857397079467773,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "2b96f8589a6f4d10a1e77331d53b828d",
+          "page": 8,
+          "score": 0.029631,
+          "score_type": "rrf",
+          "dense_score": 0.514849536868042,
+          "fusion_score": 0.029631255194544792,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "QA 抽取后出现无法直接解析的 JSON 时怎样后处理？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 0.25,
+      "abstain_correct": null,
+      "latency_ms": 258.3,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "ff35c56d4ba84946b5191cd4ef85b297",
+          "page": 2,
+          "score": 0.032018,
+          "score_type": "rrf",
+          "dense_score": 0.5991490476729444,
+          "fusion_score": 0.03201844170689583,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "4f5119f8f89a436f9766a8251758c127",
+          "page": 4,
+          "score": 0.031545,
+          "score_type": "rrf",
+          "dense_score": 0.6579237247092804,
+          "fusion_score": 0.03154495730996132,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "0cdb673b06d648a19f99506321a49e3b",
+          "page": 6,
+          "score": 0.030579,
+          "score_type": "rrf",
+          "dense_score": 0.6037847732361442,
+          "fusion_score": 0.03057890012860298,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "eb5dc8c8f983421ba6fefc87851b9f6a",
+          "page": 7,
+          "score": 0.030579,
+          "score_type": "rrf",
+          "dense_score": 0.5659610804632383,
+          "fusion_score": 0.03057890012860298,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "07fbfd3c92444d43b28b0ad6af976796",
+          "page": 1,
+          "score": 0.030214,
+          "score_type": "rrf",
+          "dense_score": 0.5193766274941807,
+          "fusion_score": 0.03021353855729103,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "如何检查 QA 数据质量并过滤低质量问答？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 0.5,
+      "abstain_correct": null,
+      "latency_ms": 272.76,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "ff35c56d4ba84946b5191cd4ef85b297",
+          "page": 2,
+          "score": 0.032787,
+          "score_type": "rrf",
+          "dense_score": 0.7000920099215033,
+          "fusion_score": 0.032786883413791656,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "4fdbf0344a484732823bd47170f73009",
+          "page": 8,
+          "score": 0.032002,
+          "score_type": "rrf",
+          "dense_score": 0.6987665704007274,
+          "fusion_score": 0.0320020467042923,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "1758feaab4d34d93b3de9659a1a3d6ba",
+          "page": 9,
+          "score": 0.031054,
+          "score_type": "rrf",
+          "dense_score": 0.5670400087626235,
+          "fusion_score": 0.031054403632879257,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "2b96f8589a6f4d10a1e77331d53b828d",
+          "page": 8,
+          "score": 0.02971,
+          "score_type": "rrf",
+          "dense_score": 0.6102810788346413,
+          "fusion_score": 0.029709506779909134,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "07fbfd3c92444d43b28b0ad6af976796",
+          "page": 1,
+          "score": 0.02885,
+          "score_type": "rrf",
+          "dense_score": 0.5797060006730009,
+          "fusion_score": 0.028850145637989044,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "企业文档问答系统为什么需要先准备问题和回答数据？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 0.5,
+      "abstain_correct": null,
+      "latency_ms": 319.52,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "07fbfd3c92444d43b28b0ad6af976796",
+          "page": 1,
+          "score": 0.032787,
+          "score_type": "rrf",
+          "dense_score": 0.6167416634421035,
+          "fusion_score": 0.032786883413791656,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "ff35c56d4ba84946b5191cd4ef85b297",
+          "page": 2,
+          "score": 0.032002,
+          "score_type": "rrf",
+          "dense_score": 0.5536349381648095,
+          "fusion_score": 0.0320020467042923,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "c66e32ec789a4d9b9e8b0c7fc79d24ae",
+          "chunk_id": "1758feaab4d34d93b3de9659a1a3d6ba",
+          "page": 9,
+          "score": 0.030769,
+          "score_type": "rrf",
+          "dense_score": 0.5337374236252059,
+          "fusion_score": 0.03076923079788685,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "46740b9f2674465cabe06e6d2ce196bf",
+          "page": 112,
+          "score": 0.029236,
+          "score_type": "rrf",
+          "dense_score": 0.5175138331767256,
+          "fusion_score": 0.029236022382974625,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "484af8a030e644e3b15737b00e1b1bd9",
+          "page": 1,
+          "score": 0.027651,
+          "score_type": "rrf",
+          "dense_score": 0.5279854792882466,
+          "fusion_score": 0.02765064872801304,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "ChatGPT 可以应用于哪些自然语言处理场景？",
+      "granularity": "page",
+      "hit_at_k": 0.0,
+      "reciprocal_rank": 0.0,
+      "abstain_correct": null,
+      "latency_ms": 286.55,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "8186ecbb7b6e4b28af4be7cdef83d677",
+          "page": 115,
+          "score": 0.030886,
+          "score_type": "rrf",
+          "dense_score": 0.7835567880715434,
+          "fusion_score": 0.030886195600032806,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "36e1bcf78d204cc8b447e023a55f41c7",
+          "page": 113,
+          "score": 0.029631,
+          "score_type": "rrf",
+          "dense_score": 0.7603136084638985,
+          "fusion_score": 0.029631255194544792,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "d05dfaaefb6d40b18b2e5d62494bed72",
+          "page": 10,
+          "score": 0.029437,
+          "score_type": "rrf",
+          "dense_score": 0.7659658015790195,
+          "fusion_score": 0.02943722903728485,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "ac5c696c8c134fbdb4f475f70f7be25b",
+          "page": 3,
+          "score": 0.028372,
+          "score_type": "rrf",
+          "dense_score": 0.7702610578066507,
+          "fusion_score": 0.028371628373861313,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "46973792d4bc47038717bf22508abc43",
+          "page": 112,
+          "score": 0.028219,
+          "score_type": "rrf",
+          "dense_score": 0.7535440753068611,
+          "fusion_score": 0.028219396248459816,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "循环神经网络处理长期依赖时有什么局限？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 0.5,
+      "abstain_correct": null,
+      "latency_ms": 265.83,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "8cfedd7af3d94a7cb5b29ce7825e5ad8",
+          "page": 10,
+          "score": 0.032522,
+          "score_type": "rrf",
+          "dense_score": 0.578408040898966,
+          "fusion_score": 0.032522473484277725,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "a4642c6a04954f57b6b1fc2766178c4e",
+          "page": 6,
+          "score": 0.031319,
+          "score_type": "rrf",
+          "dense_score": 0.6430631681524474,
+          "fusion_score": 0.03131881356239319,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "391ae080ab6e4c8b95d4a6921b9a3c6c",
+          "page": 10,
+          "score": 0.031281,
+          "score_type": "rrf",
+          "dense_score": 0.5350963207585755,
+          "fusion_score": 0.03128054738044739,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "55df326902d84a27a4962b64c42de9fc",
+          "page": 15,
+          "score": 0.029911,
+          "score_type": "rrf",
+          "dense_score": 0.5492400338877201,
+          "fusion_score": 0.02991071343421936,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "4cf889cc0a2b4d2f9a8df1e691e3d5ee",
+          "page": 5,
+          "score": 0.029762,
+          "score_type": "rrf",
+          "dense_score": 0.5539803255770034,
+          "fusion_score": 0.0297619067132473,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "ChatGPT 应用中的自然语言数据预处理包括哪些步骤？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "abstain_correct": null,
+      "latency_ms": 265.42,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "efad873f13b04f758452cb6a80139cea",
+          "page": 7,
+          "score": 0.032522,
+          "score_type": "rrf",
+          "dense_score": 0.791636979389038,
+          "fusion_score": 0.032522473484277725,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "16bc92bdff1d486caee033f2d129e7ca",
+          "page": 6,
+          "score": 0.031498,
+          "score_type": "rrf",
+          "dense_score": 0.7050875035190406,
+          "fusion_score": 0.0314980149269104,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "c85f47b1e0144984a381466c9d02e382",
+          "page": 15,
+          "score": 0.030077,
+          "score_type": "rrf",
+          "dense_score": 0.6833463248489879,
+          "fusion_score": 0.03007688745856285,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "27b62695a5c14e43b22c40f7cdd6c15b",
+          "page": 8,
+          "score": 0.028665,
+          "score_type": "rrf",
+          "dense_score": 0.6915475034889805,
+          "fusion_score": 0.028665028512477875,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "cf71c8cc82094527ad11957f3cccb6a1",
+          "page": 108,
+          "score": 0.027864,
+          "score_type": "rrf",
+          "dense_score": 0.6644027340835487,
+          "fusion_score": 0.027863778173923492,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "部署 ChatGPT 模型时有哪些压缩或优化技术？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "abstain_correct": null,
+      "latency_ms": 280.53,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "27b62695a5c14e43b22c40f7cdd6c15b",
+          "page": 8,
+          "score": 0.032018,
+          "score_type": "rrf",
+          "dense_score": 0.6736999040351073,
+          "fusion_score": 0.03201844170689583,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "9206720865ff41f5ad8a7f55ec0f4484",
+          "page": 13,
+          "score": 0.032018,
+          "score_type": "rrf",
+          "dense_score": 0.6963192316070675,
+          "fusion_score": 0.03201844170689583,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "14bb2e7cfbfc4dc6bb57836a3f8bc7e0",
+          "page": 11,
+          "score": 0.031514,
+          "score_type": "rrf",
+          "dense_score": 0.6854885528509184,
+          "fusion_score": 0.03151364624500275,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "efad873f13b04f758452cb6a80139cea",
+          "page": 7,
+          "score": 0.030159,
+          "score_type": "rrf",
+          "dense_score": 0.6819257639886241,
+          "fusion_score": 0.03015873208642006,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "8532dc840cb64fa391ff2596db08db84",
+          "page": 111,
+          "score": 0.029199,
+          "score_type": "rrf",
+          "dense_score": 0.6453516419242279,
+          "fusion_score": 0.02919863536953926,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "Transformer 编码器里的自注意力层和前馈网络各有什么作用？",
+      "granularity": "page",
+      "hit_at_k": 1.0,
+      "reciprocal_rank": 1.0,
+      "abstain_correct": null,
+      "latency_ms": 291.62,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "08d58cdbf06447bdafbbef207d7f1e06",
+          "page": 9,
+          "score": 0.032787,
+          "score_type": "rrf",
+          "dense_score": 0.6997404675196206,
+          "fusion_score": 0.032786883413791656,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "72d9a1b88af747b788ae05a1ad890674",
+          "page": 3,
+          "score": 0.032258,
+          "score_type": "rrf",
+          "dense_score": 0.6824551063313045,
+          "fusion_score": 0.032258063554763794,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "484af8a030e644e3b15737b00e1b1bd9",
+          "page": 1,
+          "score": 0.031258,
+          "score_type": "rrf",
+          "dense_score": 0.6160932064555673,
+          "fusion_score": 0.03125763311982155,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "e322a7fa60c8465ba77c97f63d978e36",
+          "page": 3,
+          "score": 0.030118,
+          "score_type": "rrf",
+          "dense_score": 0.588384380348654,
+          "fusion_score": 0.030117753893136978,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "b5ba429209924394b235cae57416a750",
+          "page": 2,
+          "score": 0.03009,
+          "score_type": "rrf",
+          "dense_score": 0.6067522265596969,
+          "fusion_score": 0.03009049780666828,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "LangGraph Store 如何跨线程共享记忆？",
+      "granularity": "negative",
+      "hit_at_k": null,
+      "reciprocal_rank": null,
+      "abstain_correct": false,
+      "latency_ms": 1014.85,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "5198e12d5c8349f3992d2eb088b3ee68",
+          "page": 5,
+          "score": 0.032522,
+          "score_type": "rrf",
+          "dense_score": 0.5140673607611627,
+          "fusion_score": 0.032522473484277725,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "dda4df6379094c1da7f73ef6c40a8895",
+          "page": 2,
+          "score": 0.032018,
+          "score_type": "rrf",
+          "dense_score": 0.5329111960091675,
+          "fusion_score": 0.03201844170689583,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "070ce846bc7e4f0281b8b7b73158c65d",
+          "page": 5,
+          "score": 0.032002,
+          "score_type": "rrf",
+          "dense_score": 0.5094964029242104,
+          "fusion_score": 0.0320020467042923,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "4702a8c0019d4773a6372b025f3af9e3",
+          "page": 14,
+          "score": 0.029857,
+          "score_type": "rrf",
+          "dense_score": 0.48959674094569455,
+          "fusion_score": 0.029857397079467773,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "5994506861814aaeb5e9eeb680625f55",
+          "page": 3,
+          "score": 0.02971,
+          "score_type": "rrf",
+          "dense_score": 0.49902881986833386,
+          "fusion_score": 0.029709506779909134,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "Agent 的工具调用如何做人工审批？",
+      "granularity": "negative",
+      "hit_at_k": null,
+      "reciprocal_rank": null,
+      "abstain_correct": false,
+      "latency_ms": 318.56,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "dda4df6379094c1da7f73ef6c40a8895",
+          "page": 2,
+          "score": 0.032018,
+          "score_type": "rrf",
+          "dense_score": 0.61922901187472,
+          "fusion_score": 0.03201844170689583,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "e8bdd3d86d2e4fe8873e0f1c7e05611b",
+          "page": 8,
+          "score": 0.030415,
+          "score_type": "rrf",
+          "dense_score": 0.5389353565328718,
+          "fusion_score": 0.030414745211601257,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "ca93b8c69bcf42b689d6b212a1cc8f75",
+          "page": 1,
+          "score": 0.030077,
+          "score_type": "rrf",
+          "dense_score": 0.5530592190872797,
+          "fusion_score": 0.03007688745856285,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "00c0ba891c60406c8d685eb88f8f5ac1",
+          "page": 6,
+          "score": 0.030018,
+          "score_type": "rrf",
+          "dense_score": 0.6071934947689723,
+          "fusion_score": 0.030017919838428497,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "e02ca6eeb8f44c529828e6b41318fe32",
+          "page": 7,
+          "score": 0.028898,
+          "score_type": "rrf",
+          "dense_score": 0.5708769781265116,
+          "fusion_score": 0.028898129239678383,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "Milvus 的 IVF_FLAT 索引如何配置？",
+      "granularity": "negative",
+      "hit_at_k": null,
+      "reciprocal_rank": null,
+      "abstain_correct": false,
+      "latency_ms": 286.46,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "dda4df6379094c1da7f73ef6c40a8895",
+          "page": 2,
+          "score": 0.031258,
+          "score_type": "rrf",
+          "dense_score": 0.4292121964466837,
+          "fusion_score": 0.03125763311982155,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "549ae0d8ad2740c4acf38bc675ca3d8e",
+          "page": 8,
+          "score": 0.030478,
+          "score_type": "rrf",
+          "dense_score": 0.409783836470132,
+          "fusion_score": 0.030477948486804962,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "738b8244de524badae0d6a0e0596c4d8",
+          "chunk_id": "00c0ba891c60406c8d685eb88f8f5ac1",
+          "page": 6,
+          "score": 0.028629,
+          "score_type": "rrf",
+          "dense_score": 0.4024103876393521,
+          "fusion_score": 0.028629031032323837,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "a0cef8e0c75a416abfe31020ed41a2f9",
+          "page": 65,
+          "score": 0.016393,
+          "score_type": "rrf",
+          "dense_score": 0.4659590424508529,
+          "fusion_score": 0.016393441706895828,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "0a77848576b9416da8702186de27b2eb",
+          "page": 4,
+          "score": 0.016129,
+          "score_type": "rrf",
+          "dense_score": 0.44894186164631644,
+          "fusion_score": 0.016129031777381897,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "量子计算中的 Shor 算法怎样分解大整数？",
+      "granularity": "negative",
+      "hit_at_k": null,
+      "reciprocal_rank": null,
+      "abstain_correct": false,
+      "latency_ms": 300.22,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "4702a8c0019d4773a6372b025f3af9e3",
+          "page": 14,
+          "score": 0.032002,
+          "score_type": "rrf",
+          "dense_score": 0.46085703229670066,
+          "fusion_score": 0.0320020467042923,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "1cce9309d4154c8b91c38ad11cbb831a",
+          "chunk_id": "b128f009af70462d8a7d21cfe8e347d3",
+          "page": 4,
+          "score": 0.030331,
+          "score_type": "rrf",
+          "dense_score": 0.4301260936079458,
+          "fusion_score": 0.030330881476402283,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "20b932f24f5d4921b4a13e5998d70146",
+          "page": 4,
+          "score": 0.029214,
+          "score_type": "rrf",
+          "dense_score": 0.49391077989046095,
+          "fusion_score": 0.029213953763246536,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "953a647f57c948c59b62803ce6836bdf",
+          "chunk_id": "08d2c215a2594ddf94979a325779d961",
+          "page": 11,
+          "score": 0.029031,
+          "score_type": "rrf",
+          "dense_score": 0.42450865376204416,
+          "fusion_score": 0.02903091162443161,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "1cce9309d4154c8b91c38ad11cbb831a",
+          "chunk_id": "e2c5dee3073541699da5d56f3d84bab3",
+          "page": 1,
+          "score": 0.028219,
+          "score_type": "rrf",
+          "dense_score": 0.4271832211733562,
+          "fusion_score": 0.028219396248459816,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    },
+    {
+      "question": "请帮我总结用户自己的简历",
+      "granularity": "negative",
+      "hit_at_k": null,
+      "reciprocal_rank": null,
+      "abstain_correct": false,
+      "latency_ms": 277.28,
+      "returned_count": 5,
+      "retrieved": [
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "ff0a5159f7344f3f96d3387d3f604a44",
+          "page": 95,
+          "score": 0.032787,
+          "score_type": "rrf",
+          "dense_score": 0.5725447748855008,
+          "fusion_score": 0.032786883413791656,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "67c40a2fdc05448798726e952788e5de",
+          "page": 26,
+          "score": 0.027693,
+          "score_type": "rrf",
+          "dense_score": 0.48829828058901537,
+          "fusion_score": 0.027692895382642746,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "f973cb627e5e4da8a81d0f53f550b93a",
+          "page": 23,
+          "score": 0.027397,
+          "score_type": "rrf",
+          "dense_score": 0.4776741218149425,
+          "fusion_score": 0.027397260069847107,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "e2b24be0f2b449df8ce446cb372f0d39",
+          "page": 99,
+          "score": 0.026993,
+          "score_type": "rrf",
+          "dense_score": 0.48225110197031246,
+          "fusion_score": 0.02699275314807892,
+          "rerank_score": null,
+          "is_expansion": false
+        },
+        {
+          "book_id": "b06218b7b5514394946139350ca513a0",
+          "chunk_id": "138b8b764b3245fa8372916c7e04ab4a",
+          "page": 37,
+          "score": 0.016129,
+          "score_type": "rrf",
+          "dense_score": 0.45438807657910146,
+          "fusion_score": 0.016129031777381897,
+          "rerank_score": null,
+          "is_expansion": false
+        }
+      ]
+    }
+  ]
+}

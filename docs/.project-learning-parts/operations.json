@@ -1,0 +1,643 @@
+{
+  "moduleName": "运行保障与评测",
+  "moduleDescription": "这一模块解释后端怎样初始化并管理 PostgreSQL、LangGraph 持久化组件与 Milvus，以及如何通过健康检查定位运行故障。随后把模拟测试、真实检索评测和真实回答评测串起来，帮助读者分清功能正确性与知识库实际效果。",
+  "sections": [
+    {
+      "title": "背景知识：进程、连接与可复现的效果判断",
+      "anchor": "practice-operations-foundations",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "背景知识：进程是正在运行的程序，服务重启会让它的内存状态消失；数据库和磁盘则能在进程退出后保存数据。连接池会复用数据库连接，避免每个请求都重新建立连接；数据库会话是一次工作使用的操作上下文，并不等于一个用户的聊天会话。异步程序遇到网络等待时可以处理其他工作，但同步客户端直接占用事件循环，仍会拖慢同一进程里的其他请求。\n\n离线评测是用事先标注的问题重复检查系统表现。“离线”表示问题和评分依据已经准备好，并不表示所有步骤都不用网络：本项目的检索评测仍访问数据库、Embedding 服务和 Milvus，真实回答评测还会调用聊天模型。模拟测试适合验证规则是否执行，真实评测才用于观察当前语料、模型和配置下的回答表现。"
+        },
+        {
+          "type": "table",
+          "table": {
+            "headers": [
+              "存储对象",
+              "当前归属",
+              "为什么分别保存"
+            ],
+            "rows": [
+              [
+                "用户、会话元信息、书籍导入状态、模型接入配置",
+                "PostgreSQL 的四张业务关系表",
+                "账号唯一性、归属关系和状态查询由关系数据库负责；SQLModel 模型是业务表定义。"
+              ],
+              [
+                "消息、会话摘要、摘要游标等图状态",
+                "AsyncPostgresSaver 的 checkpoint",
+                "按 thread_id 恢复同一聊天工作流；不是 conversations 表的一组消息字段。"
+              ],
+              [
+                "跨会话学习偏好等长期记忆",
+                "AsyncPostgresStore",
+                "按用户命名空间存取；与书籍知识来源分别管理。"
+              ],
+              [
+                "书籍切片、向量、页码、书名与归属字段",
+                "Milvus 集合",
+                "支持相似度检索和引用定位；Milvus 仍是本项目的向量库。"
+              ],
+              [
+                "原始上传文件",
+                "BOOK_STORAGE_DIR 指向的磁盘目录",
+                "关系表保存 storage_path，文件本身不放进 PostgreSQL；重试导入需要原件。"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "代码依据是 backend/app/main.py:25、backend/app/models/ 下的四个模型、backend/app/rag/milvus_store.py:45，以及 backend/app/services/knowledge_service.py:70。理解这些归属后，才不会把“HTTP 能响应”“数据库可连接”和“书籍已经可检索”误当成同一件事。"
+        },
+        {
+          "type": "table",
+          "table": {
+            "headers": [
+              "业务表与来源",
+              "主要字段与 Python 类型",
+              "约束、索引与设计原因"
+            ],
+            "rows": [
+              [
+                "users；backend/app/models/user.py:6",
+                "id:int；username:str；hashed_password:str；email:str；vip_level:int；avatar:str|None",
+                "id 主键；username 唯一且有索引，email 唯一；avatar 可空。密码保存哈希，账号唯一性由数据库共同守住。"
+              ],
+              [
+                "conversations；backend/app/models/conversation.py:9",
+                "id:int；user_id:int；thread_id:str；title:str；created_at/updated_at:datetime",
+                "user_id 外键 users.id 且有索引；thread_id 唯一且有索引。它把用户看到的会话条目与 checkpoint 的工作流状态联系起来。"
+              ],
+              [
+                "knowledge_books；backend/app/models/knowledge_book.py:9",
+                "id:str；user_id:int；title/filename/storage_path/sha256/status:str；chunk_count:int；error:str|None；created_at/updated_at:datetime",
+                "id 主键；user_id 外键且有索引，sha256 有索引但没有唯一约束。processing/ready/failed 记录导入状态，文件哈希便于识别语料和评测标注。"
+              ],
+              [
+                "model_profiles；backend/app/models/model_profile.py:9",
+                "id/user_id；name/model/base_url/encrypted_api_key:str；context_window/max_output_tokens/timeout:int；temperature/top_p:float|None；structured_output_method:str；created_at:datetime",
+                "id 为字符串主键；user_id 外键 users.id 且有索引。接入参数与加密凭据单独保存，可为不同用户绑定不同模型配置。"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "应用启动 → SQLModel 元数据创建业务表",
+            "steps": [
+              {
+                "layer": "关系数据库初始化",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/infrastructure/database/init_db.py:16",
+                "functionName": "init_db()",
+                "explanation": "导入四个模型后，SQLModel 的元数据才知道应当创建哪些业务表，create_all 在连接事务中执行这些建表操作。它不会给已有表自动迁移新增字段，所以代码另有一条真实的 PostgreSQL ALTER TABLE，修正早期 avatar 不允许为空的问题。这里展示的是实际代码，不把 ORM 定义伪写成项目里不存在的建表 SQL。",
+                "code": "async def init_db() -> None:\n    \"\"\"在连接事务中创建已注册的关系表；不会创建 Milvus 集合。\"\"\"\n    async with engine.begin() as conn:\n        await conn.run_sync(SQLModel.metadata.create_all)\n        # create_all does not update columns in an existing table. Earlier\n        # databases made avatar NOT NULL although registration treats it as optional.\n        if conn.dialect.name == \"postgresql\":\n            await conn.execute(text(\"ALTER TABLE users ALTER COLUMN avatar DROP NOT NULL\"))",
+                "keyPoint": "业务表初始化、已有表迁移与 Milvus 建集合是不同工作。",
+                "language": "python"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "生成文件存储更新：新增 generated_artifacts 业务表，当前共有用户、会话、书籍、模型配置、生成文件五张业务表。checkpoint 与 Store 由 LangGraph 管理，图片和 Word 的实际字节保存在 backend/data/generated，下载接口按记录里的 user_id 校验归属。"
+        },
+        {
+          "type": "table",
+          "table": {
+            "headers": [
+              "数据",
+              "存放位置",
+              "用途"
+            ],
+            "rows": [
+              [
+                "id、user_id、thread_id、request_key",
+                "generated_artifacts",
+                "关联用户和会话，同一次请求复用文件"
+              ],
+              [
+                "filename、media_type、size_bytes、storage_path",
+                "generated_artifacts",
+                "展示附件、返回正确下载类型、定位文件"
+              ],
+              [
+                "PNG/JPEG/WEBP 或 docx 字节",
+                "backend/data/generated/<user_id>",
+                "只经认证接口访问，生成目录不提交 Git"
+              ],
+              [
+                "artifacts 公开描述",
+                "AIMessage.additional_kwargs 与 checkpoint",
+                "聊天流与历史恢复附件，不包含服务器路径"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "启动与释放：把共享资源交给应用生命周期",
+      "anchor": "practice-operations-lifecycle",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "启动时创建一次共享组件，可以让后续请求复用同一套图、checkpoint 与 Store；请求级数据库会话则应短暂使用后及时关闭。FastAPI 的 lifespan 用 yield 分隔启动与关闭阶段，只有前面的初始化成功后，服务才会进入可处理请求的阶段。Windows 还存在事件循环与 psycopg 的兼容需求，所以仓库提供了专用启动入口。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "python run.py → Windows 事件循环 → lifespan → 请求会话",
+            "steps": [
+              {
+                "layer": "进程入口",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/run.py:8",
+                "functionName": "if __name__ == \"__main__\"",
+                "explanation": "Windows 下先设置 Selector 事件循环策略，再让 Uvicorn 导入 app.main:app，目的是兼容使用 psycopg 的异步 checkpoint 与 Store。当前入口绑定 127.0.0.1:8000 并启用 reload，适合本地开发；评测脚本各自直接 asyncio.run，并没有经过这个入口。",
+                "code": "\nif __name__ == \"__main__\":\n    if sys.platform == \"win32\":\n        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())\n    uvicorn.run(\"app.main:app\", host=\"127.0.0.1\", port=8000, reload=True)",
+                "keyPoint": "本地 API 服务优先使用仓库提供的 run.py 启动。",
+                "language": "python"
+              },
+              {
+                "layer": "应用生命周期",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/main.py:27",
+                "functionName": "lifespan()",
+                "explanation": "在创建共享图之前，lifespan 已先执行 init_db 和 mark_interrupted_imports，随后为 checkpoint 与 Store 执行 setup。两个 async with 覆盖 yield 所在的服务运行阶段，退出时由上下文管理器关闭各自资源；app.state 让请求处理代码复用它们。当前代码没有显式调用 SQLAlchemy engine.dispose，因此不能据此声称所有数据库资源都有统一的退出清理逻辑。",
+                "code": "    async with AsyncPostgresSaver.from_conn_string(settings.PSYCOPG_DATABASE_URL) as checkpointer:\n        async with AsyncPostgresStore.from_conn_string(settings.PSYCOPG_DATABASE_URL) as store:\n            await checkpointer.setup()\n            await store.setup()\n\n\n            model =create_chat_model(\n                platform=\"siliconflow\",\n                model=settings.CHAT_MODEL\n            )\n            app.state.store=store\n            # 选择其他模型时复用同一个持久化组件，原 thread_id 和消息保持不变。\n            app.state.checkpointer=checkpointer\n            app.state.chat_graph=build_chat_graph(model=model, checkpointer=checkpointer,store=store)",
+                "keyPoint": "checkpoint 与 Store 生命周期随应用，业务 AsyncSession 生命周期随请求。",
+                "language": "python"
+              },
+              {
+                "layer": "请求数据库依赖",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/infrastructure/database/database.py:9",
+                "functionName": "get_session()",
+                "explanation": "共享 AsyncEngine 管理业务数据库的连接使用，而每次依赖调用创建一个独立的 AsyncSession，避免并发请求共用一份事务状态。yield 把会话交给调用者，退出 async with 时会话会关闭；是否提交业务写入仍由仓库方法负责。",
+                "code": "engine:AsyncEngine =create_async_engine(\n    settings.DATABASE_URL\n)\nasync def get_session()->AsyncGenerator[AsyncSession, None]:\n    \"\"\"每次请求创建独立 AsyncSession，yield 给依赖使用，结束时自动关闭。\"\"\"\n    async with AsyncSession(engine) as session:\n        yield session",
+                "keyPoint": "复用引擎，不在所有请求之间共享同一个 AsyncSession。",
+                "language": "python"
+              },
+              {
+                "layer": "配置校验",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/core/config.py:106",
+                "functionName": "Settings.validate_context_budget()",
+                "explanation": "Settings 通过环境变量和指定的配置文件加载参数，并在模型建立前检查历史、摘要、证据、输出等预算之和。预算已经超过模型窗口时应尽早启动失败，避免每次请求才遇到模型拒绝；这只是部署者给定预算的校验，并不自动探测服务商窗口。",
+                "code": "    def validate_context_budget(self):\n        \"\"\"启动时检查分配的预算，避免配置本身已经超过模型窗口。\"\"\"\n        if self.MILVUS_COLLECTION == self.MILVUS_HYBRID_COLLECTION:\n            raise ValueError(\"原向量集合与混合索引集合必须使用不同名称\")\n        if self.RAG_RERANK_MAX_CANDIDATES < self.RAG_FUSION_K + 24:\n            raise ValueError(\"重排候选上限至少为 RAG_FUSION_K + 24，为短书补取预留空间\")\n        allocated = (self.CONTEXT_HISTORY_BUDGET_TOKENS + self.CONTEXT_SUMMARY_MAX_TOKENS\n                     + self.RAG_CONTEXT_BUDGET_TOKENS + self.CHAT_MAX_OUTPUT_TOKENS\n                     + self.CONTEXT_SAFETY_MARGIN_TOKENS + 1024)\n        if allocated > self.CHAT_CONTEXT_WINDOW_TOKENS:",
+                "keyPoint": "启动配置错误应尽早暴露，模型窗口预算不是自动识别结果。",
+                "language": "python"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "backend/app/core/config.py:74 的 PSYCOPG_DATABASE_URL 将 postgresql+asyncpg:// 转为 postgresql://，使业务 ORM 和 LangGraph 持久化组件可以使用同一个 PostgreSQL 服务的不同驱动。配置内容不需要复制进学习文档：只需从 backend/.env.example 建立自己的 backend/.env，并按本地服务设置 DATABASE_URL、JWT_SECRET_KEY 与模型连接配置；不要把真实密钥写进文档。"
+        }
+      ]
+    },
+    {
+      "title": "三层健康检查：先确认服务，再确认依赖",
+      "anchor": "practice-operations-health",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "健康检查应回答具体问题：/health 说明 HTTP 服务能响应，/health/db 才实际执行关系数据库查询，/health/milvus 则检查向量服务是否可连接。它们都没有 /api/v1 前缀，也不要求登录。即使三项都成功，也没有验证书籍是否 ready、Embedding 维度是否匹配或模型能否正确回答，因此还需要业务验证和评测。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "GET /health → 应用响应检查",
+            "steps": [
+              {
+                "layer": "HTTP 路由",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/main.py:89",
+                "functionName": "create_app().health_check()",
+                "explanation": "这条路由直接返回状态、项目名与版本，没有执行数据库、Milvus 或模型调用。它适合先判断进程是否能够响应，但不能证明外部依赖健康；若应用在 lifespan 启动阶段已经失败，通常也无法通过它取得响应。",
+                "code": "    async def health_check():\n        \"\"\"确认 HTTP 服务可响应，不代表数据库或模型服务正常。\"\"\"\n        return {\n            \"status\": \"ok\",\n            \"project\": settings.PROJECT_NAME,\n            \"version\": settings.VERSION,\n        }",
+                "keyPoint": "/health 是应用响应检查，不覆盖所有依赖。",
+                "language": "python"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "GET /health/db → AsyncEngine → PostgreSQL SELECT 1",
+            "steps": [
+              {
+                "layer": "关系数据库检查",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/main.py:100",
+                "functionName": "create_app().database_check()",
+                "explanation": "这里从共享 engine 申请连接，执行真实的 SELECT 1，并读取唯一标量值，成功时返回 database:1。连接退出 async with 后交还引擎管理；当前路由没有将异常专门转换为 503，所以故障时还应结合后端日志排查连接配置、服务和权限。",
+                "code": "        async with engine.connect() as conn:\n            result = await conn.execute(\n                text(\"SELECT 1\")\n            )\n\n            value = result.scalar_one()\n\n        return {\n            \"status\": \"ok\",\n            \"database\": value,\n        }",
+                "keyPoint": "数据库检查执行真实查询，不能只看端口是否开放。",
+                "language": "python"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "GET /health/milvus → ping → 线程中的同步客户端",
+            "steps": [
+              {
+                "layer": "HTTP 路由",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/main.py:113",
+                "functionName": "create_app().milvus_check()",
+                "explanation": "Milvus 检查把底层连接异常转换为中文 HTTP 503，前端或本地排障可以据此识别向量服务暂不可用。成功仅表示 list_collections 能完成，并不检查目标集合是否存在、向量维度或书籍数量。",
+                "code": "    async def milvus_check():\n        \"\"\"检查向量库连接；失败返回中文 HTTP 503。\"\"\"\n        try:\n            await MilvusBookStore().ping()\n        except Exception as exc:\n            raise HTTPException(status_code=503, detail=\"Milvus 暂不可用\") from exc\n        return {\"status\": \"ok\", \"milvus\": \"connected\"}",
+                "keyPoint": "503 表示本次 Milvus 探测失败，不等于全部聊天依赖都失败。",
+                "language": "python"
+              },
+              {
+                "layer": "同步 SDK 隔离与释放",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/milvus_store.py:29",
+                "functionName": "MilvusBookStore._ping() / MilvusBookStore.ping()",
+                "explanation": "pymilvus 的同步客户端通过 asyncio.to_thread 放到线程里运行，避免阻塞 FastAPI 的事件循环。无论 list_collections 成功还是失败，finally 都会关闭本次客户端；连接和列集合探测使用了代码中设置的 10 秒超时。",
+                "code": "    def _ping(self) -> None:\n        \"\"\"同步检查集合列表，结束时关闭客户端。\"\"\"\n        client = self._client()\n        try:\n            client.list_collections(timeout=10)\n        finally:\n            client.close()\n\n    async def ping(self) -> None:\n        \"\"\"在线程中执行同步健康检查，避免阻塞事件循环。\"\"\"\n        await asyncio.to_thread(self._ping)",
+                "keyPoint": "异步路由调用同步 SDK 时要处理阻塞和客户端释放。",
+                "language": "python"
+              }
+            ]
+          }
+        },
+        {
+          "type": "code",
+          "code": {
+            "language": "powershell",
+            "content": "Invoke-RestMethod http://127.0.0.1:8000/health\nInvoke-RestMethod http://127.0.0.1:8000/health/db\nInvoke-RestMethod http://127.0.0.1:8000/health/milvus",
+            "caption": "三个独立调用；成功时分别包含 status=ok、database=1、milvus=connected"
+          }
+        }
+      ]
+    },
+    {
+      "title": "部署与故障定位：后台导入仍依赖当前进程",
+      "anchor": "practice-operations-deployment",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "本项目使用 PostgreSQL 保存业务数据和图状态，Milvus 保存书籍向量；仓库的 Windows 脚本提供 Milvus standalone 容器的启动、停止与重启。书籍解析通过 FastAPI BackgroundTasks 在响应后执行，所以 202 只表示请求已接收。它没有独立的持久任务队列，进程退出会中断任务，这也是启动时修复遗留 processing 状态的原因。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "部署脚本 → 持久卷与健康探测",
+            "steps": [
+              {
+                "layer": "容器启动",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/deploy/milvus-standalone.bat:62",
+                "functionName": ":run_embed",
+                "explanation": "脚本把 Milvus 数据挂载到 llm-staudy-milvus-data 命名卷，将服务端口映射到宿主机，并开启嵌入式 etcd 与本地存储模式。卷的持久性让容器停止后数据仍可保留，而 unless-stopped 提供容器重启策略；这些机制并不能替代书籍任务自身的状态恢复。",
+                "code": "docker run -d ^\n    --name milvus-standalone ^\n    --restart unless-stopped ^\n    --security-opt seccomp:unconfined ^\n    -e ETCD_USE_EMBED=true ^\n    -e ETCD_DATA_DIR=/var/lib/milvus/etcd ^\n    -e ETCD_CONFIG_PATH=/milvus/configs/embedEtcd.yaml ^\n    -e COMMON_STORAGETYPE=local ^\n    -e DEPLOY_MODE=STANDALONE ^\n    -v \"llm-staudy-milvus-data:/var/lib/milvus\" ^\n    -v \"%cd%\\embedEtcd.yaml:/milvus/configs/embedEtcd.yaml\" ^\n    -v \"%cd%\\user.yaml:/milvus/configs/user.yaml\" ^\n    -p 19530:19530 ^\n    -p 9091:9091 ^\n    -p 2379:2379 ^",
+                "keyPoint": "命名卷保护向量数据，容器重启策略处理进程存活。",
+                "language": "bat"
+              }
+            ]
+          }
+        },
+        {
+          "type": "code",
+          "code": {
+            "language": "powershell",
+            "content": "Set-Location E:/work/cache/project/VsCode/llm-staudy/deploy\n.\\milvus-standalone.bat start\ndocker ps --filter name=milvus-standalone\ndocker logs milvus-standalone\nSet-Location ../backend\npython -m pip install -r requirements.lock\npython run.py",
+            "caption": "先按本机配置启动 PostgreSQL；Docker Desktop 可用后执行以上本地运行步骤"
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "上传返回 202 → 后台独立会话 → 中断状态修复",
+            "steps": [
+              {
+                "layer": "安排后台任务",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/knowledge.py:31",
+                "functionName": "upload_book()",
+                "explanation": "HTTP 请求先保存上传文件和关系记录，再把书籍 ID 与用户 ID 传给后台任务，避免将请求级数据库会话长期保留下来。返回的记录仍可能处于 processing，因此用户需要查询状态后才能确认书籍可检索；BackgroundTasks 不是跨进程的任务投递协议。",
+                "code": "    assert user.id is not None\n    user_id = user.id\n    service = KnowledgeService()\n    try:\n        book = await service.upload(session, user_id, file, title)\n    except ValueError as exc:\n        raise HTTPException(status_code=400, detail=str(exc)) from exc\n    background.add_task(service.process, book.id, user_id)\n    return book",
+                "keyPoint": "202 与 ready 含义不同；后台任务重新建立自己的会话。",
+                "language": "python"
+              },
+              {
+                "layer": "失败与取消处理",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:89",
+                "functionName": "KnowledgeService.process()",
+                "explanation": "普通异常会尝试删除本次书籍向量，再把书籍记为 failed；清理异常会被记录，所以不能承诺两个数据库间始终原子一致。任务收到取消时也会保存失败状态并重新抛出取消异常，避免将未完成任务误标为 ready；如果进程直接终止，仍可能来不及执行这段清理。",
+                "code": "            except Exception as exc:\n                logger.exception(\"书籍导入失败 book_id=%s user_id=%s\", book_id, user_id)\n                try:\n                    await self.vectors.delete_book(user_id, book.id)\n                except Exception:\n                    logger.exception(\"清理失败导入的向量失败 book_id=%s\", book_id)\n                book.status = \"failed\"\n                book.error = str(exc)[:500]\n            except asyncio.CancelledError:\n                logger.warning(\"书籍导入被取消 book_id=%s user_id=%s\", book_id, user_id)\n                book.status = \"failed\"\n                book.error = \"导入任务被中断，请重试\"\n                await self.books.update(session, book)\n                raise\n            await self.books.update(session, book)",
+                "keyPoint": "跨 PostgreSQL 与 Milvus 的导入依赖补偿处理，没有分布式事务。",
+                "language": "python"
+              },
+              {
+                "layer": "启动补偿",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/knowledge_service.py:201",
+                "functionName": "mark_interrupted_imports()",
+                "explanation": "服务启动会查找遗留 processing 记录并标记失败，让用户可以明确重试，而不是永远停在处理中。它并不自动重跑任务，也没有判断记录属于哪个工作进程，所以当前方案应按单实例开发服务理解，不能直接当作多工作进程协调方案。",
+                "code": "async def mark_interrupted_imports() -> None:\n    \"\"\"启动时将遗留的 processing 记录标记 failed，用户可明确重试。\"\"\"\n    repository = KnowledgeBookRepository()\n    async with AsyncSession(engine) as session:\n        for book in await repository.list_processing(session):\n            book.status = \"failed\"\n            book.error = \"服务重启中断了导入，请重试\"\n            await repository.update(session, book)",
+                "keyPoint": "启动修复让中断可见，重试仍由用户发起。",
+                "language": "python"
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "table": {
+            "headers": [
+              "现象",
+              "优先检查",
+              "边界"
+            ],
+            "rows": [
+              [
+                "API 启动失败，/health 无响应",
+                "后端启动日志；配置必填字段、预算校验、PostgreSQL 初始化、checkpoint/Store setup",
+                "这些步骤位于 lifespan 的 yield 之前；Milvus 不是该生命周期中的必连初始化步骤。"
+              ],
+              [
+                "/health 正常，/health/db 失败",
+                "DATABASE_URL、PostgreSQL 服务、网络与数据库权限",
+                "SELECT 1 只验证查询通路，不检查四张业务表的内容。"
+              ],
+              [
+                "/health/milvus 返回 503",
+                "docker ps、docker logs milvus-standalone、MILVUS_URI 与认证配置",
+                "脚本通过 9091/healthz 做容器探测；API 的探测则实际调用 Milvus SDK。"
+              ],
+              [
+                "导入 failed 或重启后被标记中断",
+                "knowledge_books.error、原文件、Embedding 配置、Milvus 集合维度和服务日志",
+                "先确认故障原因，再重试；重试会按用户和书籍清理旧向量后重新导入。"
+              ],
+              [
+                "三个健康检查均正常，回答仍弃答",
+                "当前用户是否有 ready 书籍、RAG_MIN_SCORE、检索证据与回答核对结果",
+                "依赖连通性不保证证据充分，不能直接改成让模型凭自身知识回答。"
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "模拟测试：先守住规则，再测真实外部依赖",
+      "anchor": "practice-operations-tests",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "测试替身是一个行为受控的简单实现，例如固定返回空检索结果的函数或输出指定答案的模型；它让测试可以精确重现边界条件。项目中的测试主要使用临时 SQLite、内存 checkpoint/Store 和模拟模型，并通过依赖替换隔离外部服务。它们能验证权限、流式事件、引用规则和上下文预算，却不能替代 PostgreSQL、Milvus 或真实模型的集成验证。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "pytest → 临时数据库与依赖替换 → 不足证据规则",
+            "steps": [
+              {
+                "layer": "HTTP 测试隔离",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/tests/test_auth_conversations.py:18",
+                "functionName": "test_register_login_and_owned_conversations().run()",
+                "explanation": "测试创建临时 SQLite 数据库并替换 get_session，因此注册、登录和会话归属检查不需要连接正式 PostgreSQL。ASGITransport 直接调用应用，后续代码再放入 FakeGraph；这条测试路径没有执行生产 lifespan，所以也不验证启动初始化及其外部连接。",
+                "code": "        engine = create_async_engine(f\"sqlite+aiosqlite:///{(tmp_path / 'test.db').as_posix()}\")\n        async with engine.begin() as connection:\n            await connection.run_sync(SQLModel.metadata.create_all)\n\n        async def session_override():\n            async with AsyncSession(engine) as session:\n                yield session\n\n        app.dependency_overrides[get_session] = session_override\n        try:\n            async with AsyncClient(transport=ASGITransport(app=app), base_url=\"http://test\") as client:",
+                "keyPoint": "测试通过说明指定路径的行为正确，不证明生产启动链已经正常。",
+                "language": "python"
+              },
+              {
+                "layer": "空证据时禁止生成",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/tests/test_rag.py:190",
+                "functionName": "test_chat_graph_abstains_without_book_evidence()",
+                "explanation": "这里把检索替换为空结果，并让回答模型一旦被调用就直接抛出断言错误，用来守住“没有书籍证据就弃答”的约束。测试使用 InMemorySaver 和 InMemoryStore 隔离持久化服务，后面的断言还检查最终答案提示依据不足且来源为空；这能稳定验证工作流分支，却不评价真实检索召回率。",
+                "code": "    class FakeModel(StreamingFakeModel):\n        def with_structured_output(self, schema):\n            return DecisionModel()\n\n        async def ainvoke(self, messages, **kwargs):\n            raise AssertionError(\"没有书籍依据时不应调用回答模型\")\n\n    monkeypatch.setattr(KnowledgeService, \"search\", empty_search)\n    graph = build_chat_graph(FakeModel(), InMemorySaver(), InMemoryStore())",
+                "keyPoint": "用会报错的测试替身证明不该发生的模型生成没有发生。",
+                "language": "python"
+              },
+              {
+                "layer": "指标公式的确定性样例",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/tests/test_rag.py:33",
+                "functionName": "test_parse_and_split_book()",
+                "explanation": "测试将正确切片放在第二位，期望命中值为 1、倒数排名为 0.5，用明确的小例子验证评分规则。引用和负例弃答也用固定文本检查，因此这些断言是评分器逻辑测试，不能当成系统目前已经达到的效果分数。",
+                "code": "def test_parse_and_split_book():\n    pages = parse_book(\"example.md\", \"第一章\\n\\nLangGraph 保存状态。\".encode())\n    chunks = split_book(\"a\" * 32, 7, \"测试书籍\", pages)\n    assert len(chunks) == 1\n    assert chunks[0].page == -1\n    assert chunks[0].user_id == 7\n    assert \"LangGraph\" in chunks[0].text\n    assert score_case([\"wrong\", chunks[0].id], {chunks[0].id}) == (1.0, 0.5)\n    assert score_answer(\"Checkpoint 保存状态 [1]\", [{\"book_id\": \"book-a\"}],\n                        [\"保存状态\"], {\"book-a\"})[\"valid_citations\"] is True\n    assert score_answer(\"当前知识库没有足够依据回答这个问题。\", [], [], set(),\n                        should_abstain=True)[\"abstain_correct\"] is True\n    assert score_answer(\"当然可以，我知道答案。\", [], [], set(),\n                        should_abstain=True)[\"abstain_correct\"] is False",
+                "keyPoint": "评分器正确与模型效果好是两种不同的证据。",
+                "language": "python"
+              }
+            ]
+          }
+        },
+        {
+          "type": "code",
+          "code": {
+            "language": "powershell",
+            "content": "Set-Location E:/work/cache/project/VsCode/llm-staudy/backend\npython -m pip install -r requirements-dev.lock\npython -m pytest tests -q",
+            "caption": "测试命令；本学习文档生成时未实际运行"
+          }
+        },
+        {
+          "type": "text",
+          "text": "tests/test_chat_stream.py 还检查 token 是否先于完成事件到达、无证据时是否跳过回答模型，以及生成失败时是否缺少最终答案事件。tests/test_context.py 检查摘要失败后的游标与重试、过长问题和完整历史保留；tests/test_models.py 通过模拟 HTTP 传输检查模型参数及凭据相关行为。这些覆盖面与真实语料评测互补，不能只凭测试数量判断知识库回答质量。"
+        }
+      ]
+    },
+    {
+      "title": "检索消融：纯向量、混合融合与重排怎样比较",
+      "anchor": "practice-operations-retrieval-evaluation",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "消融实验是在相同语料和标注问题上逐步启用组件，而不是换一批问题比较分数。evaluate.py 新增 --strategy dense/hybrid/hybrid_rerank，Service 使用请求级模式而不改全局配置。Hit@K 和 MRR@K 只统计前 K 项，短书上下文的实际返回总数另记 returned_count，避免指标虚高。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "evaluate.main → evaluate → KnowledgeService.search → score_case",
+            "steps": [
+              {
+                "layer": "评测",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/evaluate.py:61",
+                "functionName": "evaluate()",
+                "explanation": "同一用户与书籍范围内计时检索，保留总返回数量后截取前 K 用于评测。负例的正确弃答表示检索结果为空，不等于最终回答模型的弃答指标。",
+                "code": "            hits = await service.search(session, user_id, question, limit)\n            elapsed_ms = (perf_counter() - start) * 1000\n            # 列举问题可额外返回短书上下文，Hit@K/MRR 仍只统计前 K 项。\n            returned_count = len(hits)\n            hits = hits[:limit]\n            if should_abstain:\n                found_ids = []\n                expected = set()",
+                "language": "python",
+                "keyPoint": "阶段、范围、阈值和 K 的定义必须随报告一起保存。"
+              },
+              {
+                "layer": "排名指标",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/evaluate.py:24",
+                "functionName": "score_case()",
+                "explanation": "寻找第一个正确来源的排名，命中记为 1，倒数排名为 1/rank。多个片段可能属于同一书页或书籍，所以报告保留标注粒度，不能把 MRR 当作事实准确率。",
+                "code": "    rank = next((index for index, item in enumerate(found_ids, 1)\n                 if item in relevant_ids), None)\n    return (1.0 if rank else 0.0, 1.0 / rank if rank else 0.0)",
+                "language": "python",
+                "keyPoint": "MRR 衡量正确来源排在多靠前。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "table": {
+            "headers": [
+              "2026-10-22 / 15 题",
+              "Hit@5",
+              "MRR@5",
+              "检索弃答（5负例）",
+              "P50/P95 ms"
+            ],
+            "rows": [
+              [
+                "dense",
+                "1.00",
+                "0.6533",
+                "0.60",
+                "271 / 805"
+              ],
+              [
+                "hybrid",
+                "0.90",
+                "0.6750",
+                "0.00",
+                "286 / 1015"
+              ],
+              [
+                "hybrid_rerank",
+                "1.00",
+                "1.0000",
+                "1.00",
+                "1004 / 1420"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "数据来自 backend/evals/hybrid_ablation_20261022.json 及三份逐题报告。本机 5 本 ready 资料、10 正例和 5 负例，初始重排阈值为 0.30；这不是独立留出集，样本较小，不能承诺泛化结果或零幻觉。融合本身扩大候选而没有使用余弦阈值，重排与最终依据核对是另外两个阶段。"
+        }
+      ]
+    },
+    {
+      "title": "回答评测：运行真实图，再对最终答案评分",
+      "anchor": "practice-operations-answer-evaluation",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "检索找到材料后，回答仍可能漏掉关键事实、引用不存在的编号，或在依据不足时继续作答，因此需要第二条评测链。evaluate_live 运行真实聊天图，保存最终答案及来源，再调用 evaluate_answers 对保存的 JSONL 评分。保存中间产物的好处是可以重复调整或检查评分，不必每次都再次调用模型。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "evaluate_live → build_chat_graph / ainvoke → 答案 JSONL → evaluate_answers",
+            "steps": [
+              {
+                "layer": "真实模型与单题隔离",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/evaluate_live.py:42",
+                "functionName": "evaluate_live()",
+                "explanation": "真实回答评测使用服务端 SiliconFlow 配置创建模型，复用业务 build_chat_graph；每题使用随机 thread_id，避免前一题的历史影响下一题。它使用 InMemorySaver 并把 Store 设为 None，因此会访问真实书籍和模型，但不会验证 PostgreSQL checkpoint 恢复或跨会话长期记忆，save_memory 在无 Store 时会直接跳过。",
+                "code": "    model = create_chat_model(platform=\"siliconflow\", model=settings.CHAT_MODEL)\n    graph = build_chat_graph(model, InMemorySaver(), None)\n    output.parent.mkdir(parents=True, exist_ok=True)\n    latencies = []\n    with output.open(\"w\", encoding=\"utf-8\") as file:\n        for case in cases:\n            started = perf_counter()\n            result = await graph.ainvoke(\n                {\"messages\": [HumanMessage(content=case[\"question\"])]},\n                config={\"configurable\": {\"thread_id\": uuid4().hex}},\n                context=ChatContext(user_id=user_id),\n            )",
+                "keyPoint": "真实模型评测复用业务图，每题隔离历史并关闭长期记忆写入。",
+                "language": "python"
+              },
+              {
+                "layer": "业务图执行路径",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/agents/chat_graph.py:367",
+                "functionName": "build_chat_graph()",
+                "explanation": "图仍按固定节点顺序调度上下文、规划和检索，再按是否有证据选择回答或弃答。回答之后由 route_after_answer 判断是否需要记忆提炼，普通问题直接结束；这条条件边减少外部模型请求，而不是去掉 Store 或上下文摘要。",
+                "code": "    builder.add_edge(START,\"manage_context\")\n    builder.add_edge(\"manage_context\", \"plan\")\n    builder.add_conditional_edges(\"plan\", route_from_plan)\n    builder.add_conditional_edges(\"retrieve\", route_from_retrieval)\n    builder.add_conditional_edges(\"grounded_answer\", route_after_answer)\n    builder.add_conditional_edges(\"no_evidence\", route_after_answer)\n    builder.add_edge(\"save_memory\",END)\n    builder.add_conditional_edges(\"run_artifact_tools\", route_after_tools)\n",
+                "keyPoint": "评分对象是工作流最终答案，包含业务弃答与依据核对后的结果。",
+                "language": "python"
+              },
+              {
+                "layer": "保存可复核答案",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/evaluate_live.py:54",
+                "functionName": "evaluate_live()",
+                "explanation": "每题将答案、书籍与页码及切片 ID、路由、耗时和标注写入 JSONL，后续评分器因此可以脱离模型重新运行。相关书籍标注在这里由哈希映射成本次运行的 ID；保存的来源不包含完整原文，因此人工核验结论时仍要回到书籍片段。",
+                "code": "            answer = result[\"messages\"][-1]\n            row = {\n                \"question\": case[\"question\"],\n                \"answer\": str(answer.content),\n                \"sources\": [\n                    {key: source[key] for key in (\"book_id\", \"page\", \"chunk_id\")}\n                    for source in answer.additional_kwargs.get(\"sources\", [])\n                ],\n                \"route\": result.get(\"route\"),\n                \"latency_ms\": round((perf_counter() - started) * 1000, 2),\n                \"required_facts\": case.get(\"required_facts\", []),\n                \"relevant_book_ids\": [by_hash[item] for item in case.get(\"relevant_book_sha256\", [])],\n                \"should_abstain\": bool(case.get(\"should_abstain\", False)),\n            }\n            file.write(json.dumps(row, ensure_ascii=False) + \"\\n\")",
+                "keyPoint": "保留答案与来源，让评分结果可以追溯到单题。",
+                "language": "python"
+              },
+              {
+                "layer": "关键词和引用规则",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/evaluate_answers.py:26",
+                "functionName": "score_answer()",
+                "explanation": "事实覆盖率用忽略大小写的字符串包含判断，引用有效性则要求至少有一个 [数字] 且所有编号都位于 sources 范围内。相关来源命中只检查 sources 中是否有标注书籍，既没有逐句核实事实，也没有证明每个引用都支持相邻结论，所以这些指标仍需人工抽查。",
+                "code": "    normalized = answer.casefold()\n    fact_coverage = (sum(fact.casefold() in normalized for fact in required_facts)\n                     / len(required_facts) if required_facts else None)\n    citation_numbers = {int(value) for value in CITATION.findall(answer)}\n    valid_citations = bool(citation_numbers) and all(\n        1 <= number <= len(sources) for number in citation_numbers\n    )\n    source_hit = (any(source.get(\"book_id\") in relevant_book_ids for source in sources)\n                  if relevant_book_ids else None)\n    return {\n        \"fact_coverage\": fact_coverage,\n        \"valid_citations\": valid_citations,\n        \"relevant_source_hit\": source_hit,\n        \"citation_numbers\": sorted(citation_numbers),\n        \"abstain_correct\": None,",
+                "keyPoint": "关键词覆盖与编号有效，是可自动复核的信号，不等于语义真实性。",
+                "language": "python"
+              },
+              {
+                "layer": "负例弃答判定",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/evaluate_answers.py:16",
+                "functionName": "score_answer()",
+                "explanation": "负例不参与关键词、引用和相关来源的正例平均值，改为单独检查指定的依据不足提示与空来源。这样的规则与当前业务图固定弃答文案一致，但如果将来改写文案，也要同步检查评分器，避免行为正确却因字符串不匹配被判错。",
+                "code": "    if should_abstain:\n        return {\n            \"fact_coverage\": None,\n            \"valid_citations\": None,\n            \"relevant_source_hit\": None,\n            \"citation_numbers\": [],\n            \"abstain_correct\": \"当前知识库没有足够依据\" in answer and not sources,\n        }",
+                "keyPoint": "弃答评测要同时检查回答内容与来源为空。",
+                "language": "python"
+              },
+              {
+                "layer": "分别汇总各项分母",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/rag/evaluate_answers.py:58",
+                "functionName": "evaluate()",
+                "explanation": "汇总时每项都先过滤 None，再对有该项标注的样本求平均，避免把未标注项目算成失败。输出的 count 是总题数，fact_coverage、valid_citation_rate、relevant_source_hit_rate 与 abstain_accuracy 各有自己的有效样本集合；报告比较前应先检查标注是否一致。",
+                "code": "    facts = [case[\"fact_coverage\"] for case in cases if case[\"fact_coverage\"] is not None]\n    sources = [case[\"relevant_source_hit\"] for case in cases\n               if case[\"relevant_source_hit\"] is not None]\n    citations = [case[\"valid_citations\"] for case in cases if case[\"valid_citations\"] is not None]\n    abstentions = [case[\"abstain_correct\"] for case in cases if case[\"abstain_correct\"] is not None]\n    return {\n        \"count\": len(cases),\n        \"fact_coverage\": round(statistics.mean(facts), 4) if facts else None,\n        \"valid_citation_rate\": round(statistics.mean(citations), 4) if citations else None,\n        \"relevant_source_hit_rate\": round(statistics.mean(sources), 4) if sources else None,\n        \"abstain_accuracy\": round(statistics.mean(abstentions), 4) if abstentions else None,\n        \"cases\": cases,",
+                "keyPoint": "缺少标注与得到零分要区分，指标分母不能混用。",
+                "language": "python"
+              }
+            ]
+          }
+        },
+        {
+          "type": "code",
+          "code": {
+            "language": "powershell",
+            "content": "Set-Location E:/work/cache/project/VsCode/llm-staudy/backend\npython -m app.rag.evaluate_live evals/llm_books_questions.jsonl --user-id 1 --output evals/answers_current.jsonl\npython -m app.rag.evaluate_answers evals/answers_current.jsonl --output evals/answers_rescored.json\npython -m app.rag.evaluate_live evals/llm_books_abstention.jsonl --user-id 1 --output evals/abstention_current.jsonl",
+            "caption": "需真实可用的模型、数据库和书籍；用户 ID 1 是示例，应替换为实际所有者"
+          }
+        },
+        {
+          "type": "text",
+          "text": "evaluate_live 会自动调用 score_file(output)，并写出与答案同名的 .metrics.json，例如 answers_current.metrics.json；上面的 evaluate_answers 命令是对已保存答案的单独重算。真实回答报告补充聊天模型、Embedding 模型、阈值、语料哈希、耗时中位数和最大值，检索评测则输出 p50/p95，不能混写为同一种延迟指标。Windows 上这些评测模块的 main 直接使用 asyncio.run，并未应用 run.py 的事件循环策略；若本机异步驱动在该路径出现兼容异常，应从脚本入口和堆栈定位，本节未启动外部服务来验证该环境。"
+        }
+      ]
+    },
+    {
+      "title": "总结：用不同证据回答不同可靠性问题",
+      "anchor": "practice-operations-summary",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "学完这一模块，应能从一条故障现象追到负责它的资源与执行阶段：启动前的配置与数据库初始化、请求内的会话、线程中的同步 Milvus 客户端，以及响应后的进程内导入任务。还应能说明 PostgreSQL 的五张业务表、LangGraph checkpoint、Store 与 Milvus 各保存什么，避免把长期记忆当成书籍证据，或把导入已接收当成已完成。\n\n验证顺序可以从静态配置与启动日志开始，依次检查三个健康端点、模拟测试、真实检索评测和真实回答评测。每一级回答的问题不同：服务是否在线、依赖是否连通、规则是否执行、证据能否找回、最终答案是否符合标注；没有哪一个单独的成功结果足以证明整条链都正确。"
+        },
+        {
+          "type": "table",
+          "table": {
+            "headers": [
+              "能够解释的设计",
+              "本项目的具体证据",
+              "仍需知道的限制"
+            ],
+            "rows": [
+              [
+                "资源生命周期",
+                "lifespan 为 checkpoint/Store 使用 async with；get_session 为每个请求创建 AsyncSession；Milvus 客户端 finally.close",
+                "当前应用关闭流程没有显式 engine.dispose；模型连接释放也不能仅由这段 lifespan 推断。"
+              ],
+              [
+                "后台任务恢复",
+                "BackgroundTasks 调用 KnowledgeService.process；启动 mark_interrupted_imports 修复遗留状态",
+                "任务没有持久队列和自动重放，多工作进程启动时的状态协调也未实现。"
+              ],
+              [
+                "规则与实际效果分开验证",
+                "pytest 替身守住分支；evaluate 搜索真实语料；evaluate_live 复用真实图",
+                "本次仅阅读代码并生成学习文档，未运行真实服务、真实评测或测试，未给出当前效果分数。"
+              ],
+              [
+                "作品集可讲清的评测链",
+                "标注语料 → 检索结果 → 最终回答与来源 → 分项指标与单题复核",
+                "关键词和编号检查不替代事实人工核验；报告需要携带语料、模型和配置背景。"
+              ]
+            ]
+          }
+        }
+      ]
+    }
+  ]
+}

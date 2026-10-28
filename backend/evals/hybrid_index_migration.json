@@ -1,0 +1,9 @@
+{
+  "source": "llm_book_chunks_bge_m3",
+  "target": "llm_book_chunks_bge_m3_hybrid",
+  "physical_collection": "llm_book_chunks_bge_m3_hybrid_build_44b484d27f",
+  "chunks": 228,
+  "verified": true,
+  "snapshot_sha256": "e130751cb00bce25eaff1db43645c2ae258ee054eefcd360e62d772fb9d09013",
+  "old_collection_preserved": true
+}

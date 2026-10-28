@@ -1,0 +1,624 @@
+{
+  "moduleName": "账户认证与会话",
+  "moduleDescription": "本模块用 PostgreSQL 保存用户与会话元数据，通过密码哈希、JWT 和资源归属检查确定用户身份与可访问范围。会话记录用 thread_id 连接 LangGraph checkpoint，前端操作公开会话编号，后端验证后才访问完整聊天状态。",
+  "sections": [
+    {
+      "title": "背景知识：一次请求中的身份、会话与数据库连接",
+      "anchor": "practice-identity-foundations",
+      "groupTitle": "账户认证与会话",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "HTTP 可以理解为浏览器向后端发送一条请求、后端返回一条响应；后端不会仅凭上次来过就自动认识这个浏览器。项目登录后签发 JWT，它是一段可以验证签名和有效期的登录凭据，浏览器后续放进 Authorization 请求头；后端据此查询当前用户，再决定允许访问哪些书籍、会话和模型配置。\n\n本项目有三种容易混淆的“会话”：聊天会话 Conversation 表示一组聊天；LangGraph 的 thread_id 标识这组聊天的工作流状态；数据库 AsyncSession 是执行本次数据库操作的工作对象。get_session() 不接收任何参数，它使用外部 engine 创建 AsyncSession，通过 yield 交给 FastAPI，再由 FastAPI 传给接口和认证依赖；它不会生成聊天历史。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "所有带 Depends(get_session) 的接口：数据库会话的创建与释放",
+            "steps": [
+              {
+                "layer": "Dependency",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/infrastructure/database/database.py:9",
+                "functionName": "get_session()",
+                "explanation": "engine 在模块加载时创建，管理数据库连接池；get_session() 没有参数，只使用这个共享 engine。FastAPI 执行依赖后把 yield 出的 session 注入接口，接口再把同一个对象传给 Service 和 Repository。依赖结束时退出 async with 关闭 Session；关闭并不代表替业务自动提交，代码仍在仓储中明确调用 commit()。",
+                "code": "engine:AsyncEngine =create_async_engine(\n    settings.DATABASE_URL\n)\nasync def get_session()->AsyncGenerator[AsyncSession, None]:\n    \"\"\"每次请求创建独立 AsyncSession，yield 给依赖使用，结束时自动关闭。\"\"\"\n    async with AsyncSession(engine) as session:\n        yield session",
+                "language": "python",
+                "keyPoint": "共享的是连接池，每个请求使用独立的 AsyncSession。"
+              },
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/conversations.py:16",
+                "functionName": "create_conversation()",
+                "explanation": "FastAPI 分别执行 get_session 和 get_current_user，再把解析出的标题对象、数据库 Session 和已验证的 User 传给接口。接口用 current_user.id 创建会话，浏览器不能通过提交其他 user_id 指定会话归属。这里体现依赖注入：接口声明需要什么对象，框架负责按依赖关系准备对象。",
+                "code": "@router.post(\"\", response_model=ConversationRead, status_code=status.HTTP_201_CREATED)\nasync def create_conversation(data: ConversationCreate, session: AsyncSession = Depends(get_session), current_user: User = Depends(get_current_user)):\n    \"\"\"为当前用户创建会话，内部生成独立 thread_id。\"\"\"\n    assert current_user.id is not None\n    return await ConversationService().create(session,current_user.id, data)",
+                "language": "python",
+                "keyPoint": "Depends 表示框架调用依赖，不是请求里提交了一个 Session。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "阅读时先看 database.py 的 get_session，再看接口参数里的 Depends，最后跟踪 session 被传给服务和仓储的位置。这样能分清“谁创建资源、谁使用资源、谁负责提交”。项目当前直接写 AsyncSession(engine)，没有使用 sessionmaker；这是一种明确且可用的构造方式。"
+        }
+      ]
+    },
+    {
+      "title": "表结构与输入输出：用户身份为什么和聊天历史分开存",
+      "anchor": "practice-identity-schema",
+      "groupTitle": "账户认证与会话",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "数据表规定长期保存什么，输入模型规定允许客户端提交什么，响应模型规定可以公开什么。这三类模型分开后，浏览器提交的 password 不会被直接当作数据库字段保存，查询出来的 hashed_password 也不会自动公开给客户端。\n\n账户与会话使用 PostgreSQL 关系表。用户 id 连接到会话 user_id，公开的 conversation.id 连接到服务内部的 thread_id；具体聊天消息和摘要则由 LangGraph checkpoint 保存。切换模型仍用同一 thread_id，因此不需要复制聊天记录。"
+        },
+        {
+          "type": "table",
+          "table": {
+            "headers": [
+              "表与字段",
+              "实际类型及约束",
+              "设计理由"
+            ],
+            "rows": [
+              [
+                "users.id",
+                "int 主键；Python 声明允许 None，写库后获得编号",
+                "服务端以稳定编号关联其他资源，注册前无需自己分配数据库主键。"
+              ],
+              [
+                "users.username / email",
+                "username 为 str，非空、unique=True、index=True；email 为 str，非空、unique=True",
+                "用户名供快速查重/登录，邮箱用于另一种登录入口；唯一约束约束重复记录。email 未单独声明 index=True，不要讲成代码显式创建了独立邮箱索引。"
+              ],
+              [
+                "users.hashed_password / vip_level / avatar",
+                "哈希字符串非空；vip_level 为 int 默认 0；avatar 为可空字符串",
+                "不保存密码明文；VIP 和头像是已有字段，当前不代表已经实现会员业务或个人中心。"
+              ],
+              [
+                "conversations.id / user_id",
+                "int 主键；user_id 非空，外键 users.id，index=True",
+                "公开编号用于接口，外键表示归属，用户索引支持自己的会话列表查询。"
+              ],
+              [
+                "conversations.thread_id",
+                "str；uuid4().hex 默认值；unique=True、index=True、非空",
+                "将业务会话与 LangGraph checkpoint 连接，每次新建会话生成不同线程标识。"
+              ],
+              [
+                "conversations.title / created_at / updated_at",
+                "标题 str 默认新对话、max_length=200；时间为带 UTC 的 datetime 默认值",
+                "列表展示标题，按更新时间排序；当前没有为 updated_at 或 user_id+updated_at 声明复合索引。"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "模型定义与启动建表：阅读真实字段，不把声明误认为完整迁移系统",
+            "steps": [
+              {
+                "layer": "Model",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/models/user.py:6",
+                "functionName": "User(SQLModel, table=True)",
+                "explanation": "数据库 User 对象同时包含登录需要的哈希字段和其他用户信息，因此不能原样作为所有接口的公开结构。username 与 email 的唯一约束是数据库层约束，应用层提前查重主要是为了返回可理解的错误。实际数据库是否与当前模型一致还取决于建库和历史变更，不能只凭模型推断已部署表已迁移。",
+                "code": "class User(SQLModel,table=True):\n    \"\"\"用户关系模型；hashed_password 保存哈希值，不能作为明文密码使用。\"\"\"\n    __tablename__ = \"users\"\n    id:int|None=Field(default=None,primary_key=True)\n    username:str=Field(min_length=2,max_length=50,unique=True,index=True,nullable=False)\n    hashed_password:str=Field(min_length=8,nullable=False)\n    vip_level:int=Field(default=0,nullable=False)\n    avatar:str|None=Field(default=None,nullable=True)\n    email:str=Field(nullable=False,unique=True)",
+                "language": "python",
+                "keyPoint": "数据库模型描述存储结构，公开响应需要单独控制。"
+              },
+              {
+                "layer": "Model",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/models/conversation.py:9",
+                "functionName": "Conversation(SQLModel, table=True)",
+                "explanation": "Conversation 行保存归属、标题、线程标识和时间，不在这行中塞入全部消息文本。thread_id 的 default_factory 在创建对象时生成不同 UUID；user_id 将该线程绑定到真实用户。外键的存在不等于接口授权，读取历史前仍要检查当前登录用户是否拥有该会话。",
+                "code": "class Conversation(SQLModel,table=True):\n    \"\"\"一个用户拥有一个会话；thread_id 用于定位该会话的图状态。\"\"\"\n    __tablename__ = \"conversations\"\n    id: int | None = Field(default=None, primary_key=True)\n    user_id: int = Field(foreign_key=\"users.id\", index=True, nullable=False)\n    thread_id: str = Field(default_factory=lambda: uuid4().hex, unique=True, index=True, nullable=False)\n    title: str = Field(default=\"新对话\", max_length=200, nullable=False)\n    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)\n    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc), nullable=False)",
+                "language": "python",
+                "keyPoint": "conversation.id 是业务入口，thread_id 是图状态入口。"
+              },
+              {
+                "layer": "Schema",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/schemas/user.py:7",
+                "functionName": "UserCreate / UserRead",
+                "explanation": "UserCreate 接收 username、password、email、可选 avatar，Pydantic 在进入业务函数前验证长度与邮箱格式。UserRead 只列出 id、公开账户字段，不含 hashed_password；users 接口声明 response_model 后使用它过滤输出。输入模型与响应模型分开，能避免客户端任意设置 vip_level，或者把数据库密码哈希带回前端。",
+                "code": "class UserCreate(SQLModel):\n    \"\"\"注册输入，校验账号、邮箱和密码字段。\"\"\"\n    username: str = Field(min_length=2, max_length=50)\n    password: str = Field(min_length=8, max_length=128)\n    email: EmailStr\n    avatar: str | None = None\n\n\nclass UserRead(SQLModel):\n    \"\"\"可公开的用户信息，排除密码哈希。\"\"\"\n    id: int\n    username: str\n    email: EmailStr\n    vip_level: int\n    avatar: str | None",
+                "language": "python",
+                "keyPoint": "允许提交的字段、实际存储的字段、允许返回的字段不是同一份清单。"
+              },
+              {
+                "layer": "Infrastructure",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/infrastructure/database/init_db.py:16",
+                "functionName": "init_db()",
+                "explanation": "启动初始化在 engine.begin() 事务中执行 SQLModel.metadata.create_all，已导入的模型会注册到元数据并参与建表。create_all 只负责缺失表等创建工作，不负责把所有旧字段自动改成新定义；代码因此额外执行 PostgreSQL 的 avatar 去非空约束语句。它不会创建 Milvus 集合，也不等于完整版本化数据库迁移。",
+                "code": "async def init_db() -> None:\n    \"\"\"在连接事务中创建已注册的关系表；不会创建 Milvus 集合。\"\"\"\n    async with engine.begin() as conn:\n        await conn.run_sync(SQLModel.metadata.create_all)\n        # create_all does not update columns in an existing table. Earlier\n        # databases made avatar NOT NULL although registration treats it as optional.\n        if conn.dialect.name == \"postgresql\":\n            await conn.execute(text(\"ALTER TABLE users ALTER COLUMN avatar DROP NOT NULL\"))",
+                "language": "python",
+                "keyPoint": "建表初始化与正式数据库迁移是不同职责。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "注册：先创建安全账户，再签发登录凭据",
+      "anchor": "practice-identity-registration",
+      "groupTitle": "账户认证与会话",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "注册不是简单把请求 JSON 写进 users：需要先检查用户名和邮箱，再把明文密码变成不可直接还原的哈希。成功后 auth/register 直接签发 JWT，前端无需再发一次登录请求就能进入聊天页。\n\n先看 UserCreate 的输入限制，再按 register → UserService.create_user → UserRepository 追踪。密码哈希是密码验证手段，不是可解密密码，也不要与用户模型 API Key 的可逆加密混在一起。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "POST /api/v1/auth/register — 注册后返回登录 token",
+            "steps": [
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/auth.py:16",
+                "functionName": "register()",
+                "explanation": "接口接收已验证的 UserCreate 和依赖注入的 session，调用 UserService 创建用户。服务返回的用户已有数据库编号，接口把这个编号交给 create_access_token，再包装为 TokenResponse 返回前端。业务 ValueError 在这里转换为 HTTP 409，使用户名重复等冲突不会变成含糊的服务器错误。",
+                "code": "async def register(data: UserCreate, session: AsyncSession = Depends(get_session)):\n    \"\"\"接收注册数据，创建用户并返回 token；重复账号转换为 HTTP 409。\"\"\"\n    try:\n        user = await UserService().create_user(session, data)\n    except ValueError as exc:\n        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc\n    assert user.id is not None\n    return TokenResponse(access_token=create_access_token(user.id))",
+                "language": "python",
+                "keyPoint": "注册接口决定 HTTP 响应，创建用户的规则集中在服务层。"
+              },
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/user_service.py:25",
+                "functionName": "UserService.create_user()：查重",
+                "explanation": "服务先将 data.username 传给 get_by_username，再将规范类型的邮箱字符串传给 get_by_email。查到已存在记录时立即抛出具体中文错误，不继续哈希和写库。这样让一般重复注册能够得到友好提示，但查询与插入不是一个排他操作，并发时仍可能触发数据库唯一约束。",
+                "code": "existing_user = await self.repository.get_by_username(session,data.username,)\n\nif existing_user:\n    raise ValueError(\"用户名已经存在\")\n\nexisting_email = await self.repository.get_by_email(\n    session,\n    str(data.email),\n)\n\nif existing_email:\n    raise ValueError(\"邮箱已经存在\")",
+                "language": "python",
+                "keyPoint": "提前查重改善提示，唯一约束仍是并发下的最终约束。"
+              },
+              {
+                "layer": "Repository",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/user_repository.py:12",
+                "functionName": "UserRepository.get_by_username()",
+                "explanation": "仓储把用户名组成 SQLModel 的 select 条件，通过调用者传入的 Session 执行并返回首条 User 或 None。这里的 where 是 ORM 查询表达式，不是 Python 对用户对象做布尔比较；真正数据库 SQL 由 SQLAlchemy 按数据库方言生成。get_by_email 使用同样模式把过滤列换为 User.email，登录与注册复用这些查询。",
+                "code": "async def get_by_username(self,session: AsyncSession,username: str,) -> User | None:\n\n    \"\"\"按用户名查询用户，用于查重或登录。\"\"\"\n    statement = select(User).where(User.username == username)\n\n    result = await session.exec(statement)\n\n    return result.first()",
+                "language": "python",
+                "keyPoint": "SQLModel 查询是数据库表达式，返回值交回业务层判断。"
+              },
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/user_service.py:38",
+                "functionName": "UserService.create_user()：构造待保存用户",
+                "explanation": "查重通过后把 data.password 交给 hash_password，User 中保存的字段是 hashed_password。服务构造用户对象后交给 repository.create，返回最终持久化对象给注册接口。哈希和业务归属留在服务层，仓储不用知道什么样的密码能够登录。",
+                "code": "user = User(\n    username=data.username,\n    hashed_password=hash_password(data.password),\n    email=str(data.email),\n    avatar=data.avatar,\n)\n\nreturn await self.repository.create(\n    session,\n    user,\n)",
+                "language": "python",
+                "keyPoint": "明文密码只参与哈希，不作为用户字段入库。"
+              },
+              {
+                "layer": "Security",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/core/security.py:13",
+                "functionName": "hash_password()",
+                "explanation": "模块初始化 PasswordHash.recommended()，hash_password 将注册时的明文交给密码库生成哈希。算法、盐和验证所需格式由密码库负责，项目没有自己拼接散列或保存明文。后续登录必须使用 verify_password 对输入密码和保存的哈希进行验证，而不是试图解密。",
+                "code": "password_hash = PasswordHash.recommended() #使用 pwdlib 当前推荐的密码 Hash 配置。\n\n\ndef hash_password(password: str) -> str:\n    \"\"\"将明文密码转换为不可逆哈希，写库时只使用返回值。\"\"\"\n    return password_hash.hash(password)",
+                "language": "python",
+                "keyPoint": "密码哈希应交给专门密码库处理。"
+              },
+              {
+                "layer": "Repository",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/user_repository.py:36",
+                "functionName": "UserRepository.create()",
+                "explanation": "session.add 将新 User 纳入本次事务，commit 提交插入，refresh 再读取数据库生成或更新的字段。创建前 user.id 可以为 None，刷新后注册接口才能拿真实编号签发 token。当前提交发生在仓储方法内部；这使单个创建流程简单，也意味着若未来要把多个写入合成一个事务，需要重新规划提交边界。",
+                "code": "async def create(self,session: AsyncSession,user: User,) -> User:\n\n    \"\"\"提交新用户并刷新，取得数据库生成的用户主键。\"\"\"\n    session.add(user)\n\n    await session.commit()\n\n    await session.refresh(user)\n\n    return user",
+                "language": "python",
+                "keyPoint": "add 不等于已经持久化，commit 后再 refresh 取得主键。"
+              },
+              {
+                "layer": "Security",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/core/security.py:28",
+                "functionName": "create_access_token()",
+                "explanation": "函数接收已写入数据库的 user_id，将字符串 sub 和过期时间 exp 签入 JWT。返回的是签名 token，token 载荷不是加密容器，不能把密码或模型 API Key 放进去。后续后端验证签名与有效期后读取 sub，重新查询真实用户。",
+                "code": "def create_access_token(user_id:int)->str:\n    \"\"\"将用户编号与过期时间签入 JWT，供前端后续请求使用。\"\"\"\n    expire=datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)\n    payload={\"sub\":str(user_id),\"exp\":expire}\n    return jwt.encode(payload,settings.JWT_SECRET_KEY,algorithm=settings.JWT_ALGORITHM)",
+                "language": "python",
+                "keyPoint": "JWT 承载用户编号和有效期，不承载密码与密钥。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "POST /api/v1/users — 复用注册规则，只返回公开用户信息",
+            "steps": [
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/users.py:27",
+                "functionName": "users.create_user()",
+                "explanation": "这条已有接口也调用同一个 UserService.create_user，因此不会另存一份不同的注册规则。与 auth/register 的区别是它直接返回 User，再由 response_model=UserRead 过滤公开字段，不调用 create_access_token。阅读时认清两个 HTTP 入口共享一条创建链，避免误以为它们是两个用户系统。",
+                "code": "service = UserService()\n\ntry:\n    user = await service.create_user(\n        session,\n        data,\n    )\nexcept ValueError as exc:\n    raise HTTPException(\n        status_code=status.HTTP_409_CONFLICT,\n        detail=str(exc),\n    )\n\nreturn user",
+                "language": "python",
+                "keyPoint": "相同创建业务可复用，是否返回 token 是接口层的差异。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "此处没有项目手写的 INSERT SQL；真实写库行为在 session.add/commit。不要将文档里的等价 SQL 当作项目执行日志。并发重复注册引发的 IntegrityError 当前没有在这些服务中统一转为 409，这是现有边界。"
+        }
+      ]
+    },
+    {
+      "title": "登录：查询账户、校验密码，再返回 JWT",
+      "anchor": "practice-identity-login",
+      "groupTitle": "账户认证与会话",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "登录要证明请求中的密码与已注册账户匹配，而不是查询到某个用户名就放行。项目复用一个 username 字段输入用户名或邮箱，使用字符 @ 选择查询路径；验证成功后返回与注册相同的 TokenResponse。\n\n这里的流程不会建立一条服务器登录会话记录；它签发有有效期的 JWT。后续身份检查由 get_current_user 完成，因此密码验证与每次请求认证是两个阶段。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "POST /api/v1/auth/login — 用户名或邮箱登录",
+            "steps": [
+              {
+                "layer": "Schema",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/schemas/auth.py:6",
+                "functionName": "LoginRequest / TokenResponse",
+                "explanation": "请求模型把 username 和 password 限定为长度受限的字符串，字段名 username 同时允许邮箱内容。TokenResponse 公开 access_token 和固定 bearer 类型，不返回数据库用户对象或密码哈希。格式不满足要求时 FastAPI 在业务函数前返回校验错误，格式正确不代表账户一定存在。",
+                "code": "class LoginRequest(BaseModel):\n    \"\"\"登录输入；username 字段也接受邮箱。\"\"\"\n    username: str = Field(min_length=2, max_length=254)\n    password: str = Field(min_length=8, max_length=128)\n\nclass TokenResponse(BaseModel):\n    \"\"\"认证成功返回的访问 token，前端用于后续 Bearer 请求。\"\"\"\n    access_token: str\n    token_type: str = \"bearer\"",
+                "language": "python",
+                "keyPoint": "参数格式校验在入口，账户与密码是否匹配在业务层。"
+              },
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/auth.py:26",
+                "functionName": "login()",
+                "explanation": "接口将 session、data.username、data.password 传给 authenticate，并等待真实 User 返回。认证失败的 ValueError 变成 HTTP 401；成功时只取数据库用户编号交给 create_access_token。这样的边界让业务服务不依赖 FastAPI 的 HTTPException，后续测试认证规则时可以直接调用服务。",
+                "code": "async def login(data:LoginRequest,session:AsyncSession=Depends(get_session)):\n    \"\"\"验证用户名或邮箱和密码；成功返回 token，失败返回 HTTP 401。\"\"\"\n    try:\n        user=await AuthService().authenticate(session,data.username,data.password)\n    except ValueError as exc:\n        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED,detail=str(exc)) from exc\n    assert user.id is not None\n    return TokenResponse(access_token=create_access_token(user.id))",
+                "language": "python",
+                "keyPoint": "服务判断能否登录，接口把结果转换为 HTTP 协议。"
+              },
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/auth_service.py:15",
+                "functionName": "AuthService.authenticate()",
+                "explanation": "字符串中有 @ 时调用 get_by_email，否则调用 get_by_username，查询结果交给本函数判断。若账户不存在或密码验证失败，统一返回“用户名或密码错误”，减少通过错误文字区分账户是否存在。当前用户名输入模型并没有禁止 @，因此 @ 是现有实现中的分流约定，不是完整的账号类型系统。",
+                "code": "async def authenticate(self,session:AsyncSession,username:str,password:str)->User:\n    \"\"\"根据账号格式选择用户名或邮箱查询，再校验密码，返回已验证用户。\"\"\"\n    user=(await self.respository.get_by_email(session,username)\n          if \"@\" in username else await self.respository.get_by_username(session,username))\n    if user is None or not verify_password(password,user.hashed_password):\n        raise ValueError(\"用户名或密码错误\")\n\n    return user",
+                "language": "python",
+                "keyPoint": "账户不存在与密码错误使用相同业务提示。"
+              },
+              {
+                "layer": "Repository",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/user_repository.py:28",
+                "functionName": "UserRepository.get_by_email()",
+                "explanation": "邮箱字符串成为 User.email 的查询条件，Session 执行后返回首条用户或 None。仓储只负责定位记录，不在这一层检查密码，也不签发 token。用户名登录改用 get_by_username，数据仍来自同一张 users 表。",
+                "code": "statement = select(User).where(\n    User.email == email\n)\n\nresult = await session.exec(statement)\n\nreturn result.first()",
+                "language": "python",
+                "keyPoint": "用户名与邮箱是同一账户的两条查询入口。"
+              },
+              {
+                "layer": "Security",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/core/security.py:21",
+                "functionName": "verify_password()",
+                "explanation": "函数接收本次输入的明文和数据库保存的哈希，交给密码库验证是否匹配，返回布尔值给 authenticate。它不是把输入再做一次简单 hash 后比较，因为密码库需要处理盐及算法编码。正确密码也不会导致函数回传或保存明文，验证后由认证服务返回用户对象。",
+                "code": "def verify_password(plain_password: str,hashed_password: str,) -> bool:\n    \"\"\"用密码库验证输入密码是否匹配数据库中的哈希。\"\"\"\n    return password_hash.verify(\n        plain_password,\n        hashed_password,\n    )",
+                "language": "python",
+                "keyPoint": "验证密码使用 verify，不手动比较重新计算的哈希字符串。"
+              },
+              {
+                "layer": "Security",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/core/security.py:28",
+                "functionName": "create_access_token()",
+                "explanation": "认证服务通过后，本函数把已经确认的用户编号写入 sub，并计算配置规定的到期时间。浏览器之后把返回值放入 Bearer 请求头，后端无需重复让用户提交密码。JWT 的有效期限制长期使用，但当前实现没有服务端 token 黑名单或刷新 token 流程，不能描述成随时可撤销登录。",
+                "code": "def create_access_token(user_id:int)->str:\n    \"\"\"将用户编号与过期时间签入 JWT，供前端后续请求使用。\"\"\"\n    expire=datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)\n    payload={\"sub\":str(user_id),\"exp\":expire}\n    return jwt.encode(payload,settings.JWT_SECRET_KEY,algorithm=settings.JWT_ALGORITHM)",
+                "language": "python",
+                "keyPoint": "签发 token 与撤销 token 是两种能力，当前只实现有效期签发与验证。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "认证依赖：token 先还原为真实用户，接口才能使用用户编号",
+      "anchor": "practice-identity-identity-dependency",
+      "groupTitle": "账户认证与会话",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "认证回答“你是谁”，资源归属检查回答“你能访问哪条数据”。项目先验证 Authorization 中的 Bearer token，再根据 token 的用户编号查 users；这样即使 token 尚未过期，但用户记录已不存在，请求仍会被拒绝。\n\nFastAPI 的 Depends 按声明自动执行依赖。get_current_user 使用 HTTPBearer 解析请求头，同时依赖 get_session 获得数据库 Session，最终将 User 对象返回给会话、知识库和模型接口。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "所有受保护接口：Depends(get_current_user) 的认证调用链",
+            "steps": [
+              {
+                "layer": "Dependency",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/deps.py:16",
+                "functionName": "get_current_user()：声明依赖与统一认证错误",
+                "explanation": "credentials 由 HTTPBearer 从 Authorization 头解析，session 由 get_session 创建，二者都不是前端 JSON 中提交的对象。函数预先构造中文 401 异常，并附上 WWW-Authenticate: Bearer，供后续 token 无效或用户不存在时统一使用。缺少 Bearer 头时可能在 HTTPBearer 阶段就被框架拒绝，不能把所有未登录情况都说成一定进入此函数。",
+                "code": "async def get_current_user(\n    credentials: HTTPAuthorizationCredentials = Depends(bearer_scheme),\n    session: AsyncSession = Depends(get_session),\n) -> User:\n    \"\"\"验证 Bearer token，解析用户编号并查询用户；失败时拒绝请求。\"\"\"\n    credentials_error = HTTPException(\n        status_code=status.HTTP_401_UNAUTHORIZED,\n        detail=\"登录状态无效或已过期\",\n        headers={\"WWW-Authenticate\": \"Bearer\"},\n    )",
+                "language": "python",
+                "keyPoint": "先由框架准备凭据与 Session，再执行身份查询。"
+              },
+              {
+                "layer": "Security",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/core/security.py:34",
+                "functionName": "decode_access_token()",
+                "explanation": "函数用后端密钥和指定算法解码 JWT，密码库之外的 jwt 库负责验证签名及过期时间，再把 sub 转成整数用户编号。它只返回编号，不负责证明该用户目前仍存在，存在性检查要继续查数据库。当前异常列表覆盖 InvalidTokenError、KeyError 和 ValueError；若合法签名 token 缺少 sub 导致 int(None) 的 TypeError，不在此列表中，这是代码的防御边界。",
+                "code": "def decode_access_token(token:str)->int:\n    \"\"\"验证签名、过期时间并提取用户编号；无效 token 转为业务异常。\"\"\"\n    try:\n        payload=jwt.decode(token,settings.JWT_SECRET_KEY,algorithms=[settings.JWT_ALGORITHM])\n        return int(payload.get(\"sub\"))\n    except (InvalidTokenError,KeyError,ValueError) as exc:\n        raise ValueError(\"无效或已过期的Token\") from exc",
+                "language": "python",
+                "keyPoint": "签名验证后的用户编号还需查库，且异常覆盖范围要以真实代码为准。"
+              },
+              {
+                "layer": "Dependency",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/deps.py:27",
+                "functionName": "get_current_user()：返回已验证的 User",
+                "explanation": "解码得到的 user_id 被传给 UserRepository.get_by_id，查不到用户就使用同一认证异常拒绝请求。成功后返回数据库 User，FastAPI 把它注入路由的 current_user 参数，后续逻辑应使用 current_user.id 限定资源。它没有接受浏览器自报的 user_id，因此不会因为客户端更换编号就切换身份。",
+                "code": "try:\n    user_id = decode_access_token(credentials.credentials)\nexcept ValueError:\n    raise credentials_error\n\nuser = await UserRepository().get_by_id(session, user_id)\n\nif user is None:\n    raise credentials_error\n\nreturn user",
+                "language": "python",
+                "keyPoint": "可信用户身份来自签名验证和数据库，不来自请求正文。"
+              },
+              {
+                "layer": "Repository",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/user_repository.py:47",
+                "functionName": "UserRepository.get_by_id()",
+                "explanation": "仓储使用 session.get 按 users 主键读取记录，将 User 或 None 返回认证依赖。这里没有额外用户名条件，因为 JWT 已给出稳定编号，主键查询最直接。这个短方法的作用是把数据库读取集中在仓储，认证依赖只关心是否存在。",
+                "code": "async def get_by_id(self,session: AsyncSession,user_id: int,) -> User | None:\n\n    \"\"\"按用户主键查询，供 token 解析后的身份验证使用。\"\"\"\n    return await session.get(User,user_id)",
+                "language": "python",
+                "keyPoint": "认证依赖根据仓储返回值决定放行，不把 ORM 查询散落到每个接口。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "完整身份传递：HTTP Authorization → HTTPBearer → credentials.credentials → decode_access_token → user_id → UserRepository.get_by_id → User → 路由 current_user。后面的 get_owned 才检查会话归属；认证成功并不自动获得访问全部记录的权限。"
+        }
+      ]
+    },
+    {
+      "title": "会话创建与列表：把业务编号连接到工作流线程",
+      "anchor": "practice-identity-conversation-create-list",
+      "groupTitle": "账户认证与会话",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "聊天会话记录解决的是“谁有哪组对话、标题是什么、最近什么时候使用”，不是保存模型每次生成的所有中间状态。模型状态用 thread_id 定位 checkpoint，前端列表则用公开的 conversation.id 操作；新建会话时在服务端生成 thread_id，避免客户端自己拼线程标识。\n\n会话列表只查询 current_user.id 的记录，按 updated_at 降序展示。这个 SQL 过滤是隔离数据的主要步骤，不能只在前端把其他人的条目隐藏。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "POST /api/v1/conversations — 创建当前用户的独立会话",
+            "steps": [
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/conversations.py:16",
+                "functionName": "create_conversation()",
+                "explanation": "接口接收 ConversationCreate，其中只有标题；真实 user_id 从认证依赖返回的 current_user 提取。它把 session、当前用户编号与标题对象交给 ConversationService.create，成功后通过 ConversationRead 返回会话元数据。用户无需也不能通过这个输入模型指定 thread_id 或其他用户的归属。",
+                "code": "@router.post(\"\", response_model=ConversationRead, status_code=status.HTTP_201_CREATED)\nasync def create_conversation(data: ConversationCreate, session: AsyncSession = Depends(get_session), current_user: User = Depends(get_current_user)):\n    \"\"\"为当前用户创建会话，内部生成独立 thread_id。\"\"\"\n    assert current_user.id is not None\n    return await ConversationService().create(session,current_user.id, data)",
+                "language": "python",
+                "keyPoint": "归属由认证身份决定，线程标识由服务端模型生成。"
+              },
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/conversation_service.py:16",
+                "functionName": "ConversationService.create()",
+                "explanation": "服务用可信 user_id 和 data.title 构造 Conversation，没有手动传 thread_id，因此触发表模型中的 uuid4 默认工厂。对象交给仓储保存后返回给接口，这一阶段并不调用模型或创建首条聊天消息。将空会话与发消息分开，有利于前端先取得稳定会话编号再发送问题。",
+                "code": "async def create(self, session: AsyncSession,user_id:int, data: ConversationCreate) -> Conversation:\n    \"\"\"创建属于当前用户的会话并交给仓储提交。\"\"\"\n    conversation = Conversation(user_id=user_id,title=data.title)\n    return await self.repository.create(session, conversation)",
+                "language": "python",
+                "keyPoint": "创建会话创建的是元数据行，不会自动产生 AI 回答。"
+              },
+              {
+                "layer": "Repository",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/conversation_repository.py:12",
+                "functionName": "ConversationRepository.create()",
+                "explanation": "仓储 add、commit、refresh 新会话，返回带数据库 id 的对象。业务后续通过该 id 查询出 user_id 和 thread_id，再进入图调用，所以这行是业务权限和 checkpoint 的桥梁。此方法不触碰 Milvus，也不把 thread_id 当成向量库集合名称。",
+                "code": "async def create(self, session: AsyncSession, conversation: Conversation) -> Conversation:\n    \"\"\"保存会话，提交事务并刷新数据库生成的字段。\"\"\"\n    session.add(conversation)\n    await session.commit()\n    await session.refresh(conversation)\n    return conversation",
+                "language": "python",
+                "keyPoint": "会话仓储只操作关系数据，消息持久化另由 checkpoint 负责。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "GET /api/v1/conversations — 读取当前用户的会话列表",
+            "steps": [
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/conversations.py:23",
+                "functionName": "list_conversations()",
+                "explanation": "接口没有接收任意 user_id 查询参数，而是将认证用户编号交给 list_by_user。服务在 conversation_service.py:30-32 直接转交 Repository.get_by_user，保持归属条件来自后端身份。响应只包含 ConversationRead 元数据，不会把每个会话的完整消息一次加载回来。",
+                "code": "@router.get(\"\", response_model=list[ConversationRead])\nasync def list_conversations(session: AsyncSession = Depends(get_session),current_user:User=Depends(get_current_user)):\n    \"\"\"列出当前用户的会话，供前端会话列表展示。\"\"\"\n    assert current_user.id is not None\n    return await ConversationService().list_by_user(session, current_user.id)",
+                "language": "python",
+                "keyPoint": "列表和历史分别读取，避免列表请求携带全部聊天记录。"
+              },
+              {
+                "layer": "Repository",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/conversation_repository.py:23",
+                "functionName": "ConversationRepository.get_by_user()",
+                "explanation": "where(Conversation.user_id == user_id) 把用户隔离落在数据库查询上，order_by(updated_at.desc()) 使最近使用的会话靠前。col() 将类型标注为 datetime 的模型字段明确转换为 SQL 列表达式，让类型检查器理解 desc()。代码没有 LIMIT 或分页，因此会返回当前用户的全部会话；数据规模变大时这是可以继续优化的位置。",
+                "code": "async def get_by_user(self, session: AsyncSession, user_id: int) -> list[Conversation]:\n    \"\"\"按用户筛选并按最近更新时间排序，返回会话列表。\"\"\"\n    statement = (select(Conversation)\n                 .where(Conversation.user_id == user_id)\n                 .order_by(col(Conversation.updated_at).desc())\n    )\n    return list((await session.exec(statement)).all())",
+                "language": "python",
+                "keyPoint": "在数据库按用户过滤并排序，当前尚未分页。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "读取会话与历史：先检查所有权，再使用 thread_id",
+      "anchor": "practice-identity-ownership-history",
+      "groupTitle": "账户认证与会话",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "仅凭 conversation_id 找到记录，不代表当前登录用户有权读取。项目使用 get_owned 将“不存在”和“属于别人”统一表示为会话不存在，从而避免通过不同错误提示判断他人会话是否存在。这个检查在查询会话元数据、读取历史和发送聊天时都要执行。\n\n读取历史的第二步才是使用记录中的 thread_id 查询 checkpoint。浏览器提交的是公开会话编号；后端查询、验证归属后，自己取出对应线程标识，避免让浏览器直接决定工作流读取哪个线程。"
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "GET /api/v1/conversations/{conversation_id} — 只公开当前用户拥有的会话",
+            "steps": [
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/conversations.py:30",
+                "functionName": "get_conversation()",
+                "explanation": "接口接收路径中的整数 conversation_id 和认证后的 current_user，将两者交给 get_owned。业务拒绝时转换成 HTTP 404，不区分真正缺失与他人资源。这个统一响应使客户端无法通过“无权访问”和“不存在”的差异枚举其他人的会话。",
+                "code": "@router.get(\"/{conversation_id}\", response_model=ConversationRead)\nasync def get_conversation(conversation_id: int, session: AsyncSession = Depends(get_session), current_user: User = Depends(get_current_user)):\n    \"\"\"读取一个会话并检查归属，未找到或无权访问均返回不存在。\"\"\"\n    try:\n        assert current_user.id is not None\n        return await ConversationService().get_owned(session, conversation_id, current_user.id)\n    except ValueError as exc:\n        raise HTTPException(status_code=404, detail=str(exc))",
+                "language": "python",
+                "keyPoint": "资源存在性与可访问性一起在业务服务中检查。"
+              },
+              {
+                "layer": "Service",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/services/conversation_service.py:38",
+                "functionName": "ConversationService.get_owned()",
+                "explanation": "get_owned 先调用 self.get(session, conversation_id)，get 再调用仓储 get_by_id，并在无记录时抛会话不存在。返回记录后比较 conversation.user_id 与当前 user_id，不一致也抛同样异常。当前实现是先查记录再检查归属，不是 SQL 中同时写 id 与 user_id 的过滤，解释调用链时应保持这个差别。",
+                "code": "async def get_owned(self,session:AsyncSession,conversation_id:int,user_id:int)->Conversation:\n    \"\"\"在查询后核对用户归属；统一返回不存在，避免泄露他人会话。\"\"\"\n    conversation=await self.get(session,conversation_id)\n    if conversation.user_id!=user_id:\n        raise ValueError(\"会话不存在\")\n    return conversation",
+                "language": "python",
+                "keyPoint": "get_owned = 查记录 + 校验归属，并统一拒绝提示。"
+              },
+              {
+                "layer": "Repository",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/conversation_repository.py:19",
+                "functionName": "ConversationRepository.get_by_id()",
+                "explanation": "仓储只按公开会话 id 查询首条记录并返回 Conversation 或 None。这个方法本身不具备权限隔离，所以外部用户入口不应绕过 get_owned 直接把结果返回。将 get 与 get_owned 分开便于内部复用，但也要求调用者明确选择带授权校验的方法。",
+                "code": "async def get_by_id(self, session: AsyncSession, conversation_id: int) -> Conversation | None:\n    \"\"\"按公开会话编号读取；所有权检查由业务服务负责。\"\"\"\n    return (await session.exec(select(Conversation).where(Conversation.id == conversation_id))).first()",
+                "language": "python",
+                "keyPoint": "能查到记录不等于允许用户读取，权限边界不能绕过。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "GET /api/v1/chat/{conversation_id}/history — 归属验证后读取 checkpoint 历史",
+            "steps": [
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/chat.py:161",
+                "functionName": "get_chat_history()：验证归属并定位图状态",
+                "explanation": "get_chat_history 先复用同一个 get_owned 链路；只有检查通过，才取 conversation.thread_id 调用 graph.aget_state。返回的 state.values 是该线程保存的图状态，其中 messages 包含完整历史，而不是上下文管理器裁剪后的 context_messages。这里复用共享 chat_graph 的状态读取能力，换过回答模型也仍按原线程查询。",
+                "code": "service=ConversationService()\nassert current_user.id is not None\ntry:\n    conversation = await service.get_owned(session, conversation_id, current_user.id)\nexcept ValueError as exc:\n    raise HTTPException(status_code=404,detail=str(exc))\n\ngraph=request.app.state.chat_graph\nstate=await graph.aget_state({\"configurable\":{\"thread_id\":conversation.thread_id}})\nmessages=state.values.get(\"messages\",[])",
+                "language": "python",
+                "keyPoint": "先授权，再访问 checkpoint；历史读取不调用模型生成答案。"
+              },
+              {
+                "layer": "Controller",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/api/v1/chat.py:174",
+                "functionName": "get_chat_history()：将消息转换为公开结构",
+                "explanation": "接口遍历 checkpoint 的消息，根据 HumanMessage、AIMessage、SystemMessage、ToolMessage 转换为 role，并把文字与来源组成 ChatMessageRead。只对 AIMessage 提取 sources，避免把其他类型附加字段直接公开；最后返回给前端重建历史。当前代码并不是只保留 user 和 assistant 两种消息，它显式处理 system 与 tool，所以文档不能写成接口自动过滤掉所有内部角色。",
+                "code": "    for message in messages:\n        if isinstance(message, HumanMessage):\n            role = \"user\"\n        elif isinstance(message, AIMessage):\n            role = \"assistant\"\n        elif isinstance(message, SystemMessage):\n            role = \"system\"\n        elif isinstance(message, ToolMessage):\n            role = \"tool\"\n        else:\n            role = message.type\n\n        result.append(ChatMessageRead(role=role, content=str(message.content),\n                                      sources=message.additional_kwargs.get(\"sources\", [])\n                                      if isinstance(message, AIMessage) else [],",
+                "language": "python",
+                "keyPoint": "checkpoint 消息对象需要转换成前端可读取的 role、content、sources。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "聊天请求关联操作：ConversationService.touch() 更新列表排序时间",
+            "steps": [
+              {
+                "layer": "Repository",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/app/repositories/conversation_repository.py:31",
+                "functionName": "ConversationRepository.touch()",
+                "explanation": "ConversationService.touch 只是把已验证的会话对象转交此仓储方法；仓储将 updated_at 改为当前 UTC 时间并提交刷新。流式聊天在运行图前调用 touch，普通非流式聊天在成功运行图后调用，因此更新时间不应一概解释为回答已成功。它只更新会话元数据，不影响 thread_id 和消息内容。",
+                "code": "async def touch(self,session:AsyncSession,conversation:Conversation)->Conversation:\n    \"\"\"更新会话时间并提交，使最近使用的会话排在前面。\"\"\"\n    conversation.updated_at=datetime.now(timezone.utc)\n    session.add(conversation)\n    await session.commit()\n    await session.refresh(conversation)\n    return conversation",
+                "language": "python",
+                "keyPoint": "最近使用时间与回答成功时间并不完全等价。"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "title": "边界与复习：能解释身份传递，也能指出当前限制",
+      "anchor": "practice-identity-boundaries-summary",
+      "groupTitle": "账户认证与会话",
+      "blocks": [
+        {
+          "type": "text",
+          "text": "学完本模块，应能从浏览器请求中的 token 讲到真实 User，再讲到会话所有权、thread_id 和 checkpoint。数据库会话 session 则是贯穿依赖、接口、服务、仓储的另一个对象，两条“身份/业务数据”和“数据库操作资源”传递路线不要混为一谈。\n\n下面的故障表区分了代码已经处理的情况和需要继续改进的情况。描述现状时不要把数据库唯一约束、JWT 有效期、前端退出登录都扩展成项目未实现的并发重试、即时撤销或权限平台。"
+        },
+        {
+          "type": "table",
+          "table": {
+            "headers": [
+              "场景",
+              "实际处理",
+              "为什么这样处理／当前边界"
+            ],
+            "rows": [
+              [
+                "注册用户名或邮箱已存在",
+                "UserService 提前查重，auth/users 接口把 ValueError 转为 409",
+                "常规冲突可读；并发插入仍可能触发唯一约束，当前未统一捕获 IntegrityError 并转 409。"
+              ],
+              [
+                "邮箱格式错误或密码过短",
+                "UserCreate/LoginRequest 校验拒绝，FastAPI 返回 422",
+                "输入格式与业务规则分层；main.py 校验处理不回显输入内容。"
+              ],
+              [
+                "账户不存在或密码错误",
+                "AuthService.authenticate 统一返回用户名或密码错误，login 转 401",
+                "不给失败原因过细分支，但未实现账号锁定或登录限流。"
+              ],
+              [
+                "token 签名/有效期无效，或用户被删除",
+                "decode_access_token / get_current_user 拒绝，统一中文 401",
+                "缺少 Bearer 头可能先被 HTTPBearer 拒绝，状态取决于框架行为；当前未实现黑名单与 refresh token。"
+              ],
+              [
+                "访问其他用户会话",
+                "get_owned 将归属不符转为与缺失相同的异常，接口返回 404",
+                "认证与资源授权分开检查，减少资源枚举提示。"
+              ],
+              [
+                "恶意或异常声明缺少 sub 的合法签名 JWT",
+                "int(payload.get(sub)) 可能抛 TypeError，而 decode 只捕获指定三类异常",
+                "不是宣称已修复的功能；这是读异常列表能发现的防御覆盖缺口。"
+              ],
+              [
+                "会话太多",
+                "get_by_user 查询全部并按 updated_at 降序，无分页",
+                "符合当前简单界面；规模增长时应补分页和相应索引。"
+              ],
+              [
+                "数据库断连或唯一约束异常",
+                "当前仓储没有统一业务异常翻译，异常向上抛出",
+                "get_session 负责资源关闭，不等于已经实现统一事务回滚恢复和自动重试。"
+              ]
+            ]
+          }
+        },
+        {
+          "type": "callchain",
+          "callchain": {
+            "endpoint": "测试阅读：test_register_login_and_owned_conversations()",
+            "steps": [
+              {
+                "layer": "Test",
+                "filePath": "E:/work/cache/project/VsCode/llm-staudy/backend/tests/test_auth_conversations.py:48",
+                "functionName": "test_register_login_and_owned_conversations()",
+                "explanation": "测试通过 ASGITransport 直接请求应用，用临时 SQLite 和依赖覆盖替换真实数据库，验证注册、重复注册、邮箱登录及用户隔离。Alice 创建会话后，Bob 读取同一编号得到 404，Bob 的列表为空，这比只检查登录成功更能验证授权链。这个测试能证明代码层面的接口行为，但不等于已经验证真实 PostgreSQL 部署、压力并发或付费模型服务。",
+                "code": "created = await client.post(\"/api/v1/conversations\", json={\"title\": \"LangGraph\"}, headers={\"Authorization\": f\"Bearer {token}\"})\nassert created.status_code == 201, created.text\nconversation_id = created.json()[\"id\"]\n\nsecond = await client.post(\"/api/v1/auth/register\", json={\n    \"username\": \"bob\", \"email\": \"bob@example.com\", \"password\": \"pass12345\",\n})\nother_token = second.json()[\"access_token\"]\nother_headers = {\"Authorization\": f\"Bearer {other_token}\"}\nassert (await client.get(f\"/api/v1/conversations/{conversation_id}\", headers=other_headers)).status_code == 404\nassert (await client.get(\"/api/v1/conversations\", headers=other_headers)).json() == []",
+                "language": "python",
+                "keyPoint": "把两名用户放进同一测试，才能验证资源隔离而不仅是认证成功。"
+              }
+            ]
+          }
+        },
+        {
+          "type": "text",
+          "text": "建议复述三条线：① register → UserService.create_user → 查重/哈希/Repository.create → create_access_token；② HTTPBearer → decode_access_token → UserRepository.get_by_id → current_user；③ conversation_id + current_user.id → get_owned → thread_id → graph.aget_state。然后打开源码只核对记不清的位置，练习说明每个参数来自哪里、返回值由谁继续使用。"
+        }
+      ]
+    }
+  ]
+}
